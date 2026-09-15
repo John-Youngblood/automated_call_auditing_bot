@@ -20,6 +20,7 @@ from app.services.blocklist import BlocklistService
 from app.services.broadcaster import Broadcaster
 from app.services.call_history import CallHistoryRepository
 from app.services.call_registry import CallRegistry
+from app.services.contacts import ContactsService
 from app.telephony.provider_client import TelephonyClient
 
 
@@ -43,6 +44,10 @@ def provide_history(conn: HTTPConnection) -> CallHistoryRepository:
     return conn.app.state.history
 
 
+def provide_contacts(conn: HTTPConnection) -> ContactsService:
+    return conn.app.state.contacts
+
+
 def provide_telephony(conn: HTTPConnection) -> TelephonyClient:
     return conn.app.state.telephony
 
@@ -52,4 +57,5 @@ BroadcasterDep = Annotated[Broadcaster, Depends(provide_broadcaster)]
 RegistryDep = Annotated[CallRegistry, Depends(provide_registry)]
 BlocklistDep = Annotated[BlocklistService, Depends(provide_blocklist)]
 HistoryDep = Annotated[CallHistoryRepository, Depends(provide_history)]
+ContactsDep = Annotated[ContactsService, Depends(provide_contacts)]
 TelephonyDep = Annotated[TelephonyClient, Depends(provide_telephony)]

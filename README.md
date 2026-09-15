@@ -97,6 +97,7 @@ per-minute charge.
 │   │   │   ├── call_registry.py  # single writer of call state
 │   │   │   ├── broadcaster.py    # bounded-queue fan-out to dashboards
 │   │   │   ├── blocklist.py      # cached blocklist, read on every ring
+│   │   │   ├── contacts.py       # names + favourites, also cached
 │   │   │   ├── call_history.py   # durable record of finished calls
 │   │   │   └── phone.py          # E.164 normalisation
 │   │   ├── db/                   # SQLAlchemy models + async session
@@ -149,6 +150,26 @@ where seconds matter, history is a record read at leisure.
 Every history row carries a Block action, because by the time you decide
 someone needs blocking the call is usually already over.
 
+### Names and favourites
+
+`POST /api/contacts` attaches your own label to a number — a display name, a
+star, or both. Naming and starring share one endpoint and one table because
+they are the same act: putting your own metadata on a phone number.
+
+- **A saved name beats the carrier's caller ID.** CNAM is frequently stale or
+  generic ("WIRELESS CALLER"); a name someone on the team typed is worth more.
+  The dashboard shows the name as the headline with the number beneath it.
+- **Stars are one click, no confirmation.** Starring is trivially reversible,
+  unlike blocking, so a dialog would be friction on the common action. Blocking
+  a starred caller *does* get an extra warning, because that one is almost
+  certainly a misclick.
+- **Partial updates.** Omitted fields are left alone, so the star button can't
+  wipe a name someone else typed, and vice versa.
+- **History resolves names at read time**, so naming a caller retroactively
+  labels every call they ever made.
+- **Contacts self-clean.** A contact with no name and no star holds no
+  information and is deleted, so unstarring never leaves empty rows behind.
+
 ## Going live
 
 1. Expose the backend publicly — Twilio dials in from the internet:
@@ -194,9 +215,15 @@ the dashboards hearing about it.
 bounded queue; publishing uses `put_nowait` and drops the *oldest* event when a
 client falls behind. A backgrounded browser tab slows only itself.
 
-**The blocklist is read from memory.** It's consulted on every ring while
-Twilio holds the caller waiting, so it's a cached set loaded at startup, not a
-query.
+**The blocklist and contacts are read from memory.** Both are consulted on
+every ring while Twilio holds the caller waiting, so they're caches loaded at
+startup, not queries.
+
+**Schema drift fails loudly.** `create_all` never alters an existing table, so
+dropping a model column leaves a `NOT NULL` orphan behind that breaks every
+insert — silently, because history writes are deliberately non-fatal. The
+startup check in `db/session.py` refuses to boot instead. Add Alembic before
+this holds data you'd miss.
 
 **Single worker, on purpose.** Call state and the fan-out hub are in-process.
 See [docs/architecture.md](docs/architecture.md) for the scale-out path.
@@ -208,5 +235,6 @@ See [docs/architecture.md](docs/architecture.md) for the scale-out path.
 | Accept / Reject / Block hang-up | State changes and broadcasts are real; every Twilio REST command (bridge, decline, hangup) is a logged stub in [provider_client.py](backend/app/telephony/provider_client.py) |
 | Greeting MP3 | Valid but silent |
 | Unblocking | No way to remove a number except by editing the database |
+| Contact management | No dedicated contacts screen — names and stars are set from the queue and history. `GET /api/contacts` lists them |
 | Auth | No login on the dashboard, no authorisation on the API — `blockedBy` is therefore unverified |
 | Providers | Twilio only. `<Gather input="speech">` has no direct equivalent elsewhere, so another provider means a real port, not a config change |

@@ -84,7 +84,14 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
         aria-current={selected}
       >
         <span className="call-row__top">
-          <span className="call-row__number">{formatPhoneNumber(call.caller.number)}</span>
+          <span className="call-row__number">
+            {call.caller.isFavorite && (
+              <span className="star star--inline" aria-label="Favourite">
+                ★
+              </span>
+            )}
+            {call.caller.name ?? formatPhoneNumber(call.caller.number)}
+          </span>
           {/* Counts up live while the call is open, then freezes at its
               total duration once it ends. */}
           <span className="call-row__timer">
@@ -96,7 +103,11 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
         </span>
         <span className="call-row__meta">
           <span className={`status status--${call.status}`}>{call.status}</span>
-          {call.caller.name && <span className="call-row__name">{call.caller.name}</span>}
+          {/* Name replaces the number above, so show the number here -- an
+              operator often needs to read it out or cross-reference it. */}
+          {call.caller.name && call.caller.number && (
+            <span className="call-row__name">{formatPhoneNumber(call.caller.number)}</span>
+          )}
         </span>
         {preview && <span className="call-row__preview">{preview}</span>}
       </button>

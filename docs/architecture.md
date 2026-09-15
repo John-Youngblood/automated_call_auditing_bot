@@ -111,12 +111,45 @@ and on the way to a comparison. If you need real carrier-grade parsing
 (extensions, short codes, arbitrary national formats), swap that module's body
 for `phonenumbers`; nothing else depends on how it works.
 
+**`create_all` is not a migration.** It creates missing tables and never
+alters existing ones. Dropping `transcript_line_count` from the model left the
+column in the database, still `NOT NULL` -- so every history insert failed the
+constraint. Because `CallHistoryRepository.record` deliberately swallows its
+errors (history is not worth failing a call teardown over), the app looked
+healthy while losing every row. Tests did not catch it: they build a fresh
+in-memory database per test, so the table always matches the models.
+
+`Database.create_schema` now diffs live tables against the models at boot and
+raises `SchemaDriftError` on a leftover non-nullable column, naming the column
+and the fix. That converts silent data loss into a refusal to start.
+
 **SQLite has no timezone-aware datetime type.** `DateTime(timezone=True)` is a
 no-op there: aware values go in, naive ones come back, Pydantic serialises them
 with no offset, and the browser reads them as local time — shifting every entry
 in the moderation log by the UTC offset. The `UtcDateTime` type decorator in
 `db/models.py` normalises both directions; use it for any datetime column you
 add.
+
+## Contacts
+
+`contacts` holds the team's own labels on a number: a display name, a star, or
+both. One table rather than two, because naming and starring are the same act.
+
+Kept separate from `blocked_numbers`, though, which answers a different
+question and carries its own provenance (who blocked, when, why). A number can
+appear in both — naming a nuisance caller is precisely how you recognise them.
+
+Resolution happens at two different moments, on purpose:
+
+- **Live calls** resolve name and star in the webhook, once, as the call
+  arrives. Cheap, and the dashboard renders without cross-referencing.
+  Naming someone mid-call therefore leaves the call stale, so the contacts
+  route re-resolves calls already in flight and republishes them.
+- **History rows** resolve at read time against the current contact, so naming
+  a caller retroactively labels every past call from them.
+
+A contact that ends up with no name and no star is deleted rather than stored,
+which keeps "remove name" safe to offer whether or not a saved name existed.
 
 ## Scaling out
 

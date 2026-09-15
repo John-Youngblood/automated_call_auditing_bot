@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import { useBlockNumber } from '../hooks/useBlockNumber';
+import { useContacts } from '../hooks/useContacts';
 import { useCallHistory } from '../hooks/useCallHistory';
 import { useCallStream } from '../hooks/useCallStream';
 import { useNow } from '../hooks/useNow';
@@ -11,6 +12,8 @@ import CallHistoryView from './CallHistoryView';
 import CallQueue from './CallQueue';
 import ConfirmDialog from './ConfirmDialog';
 import ConnectionBadge from './ConnectionBadge';
+import FavoriteStar from './FavoriteStar';
+import NameContactDialog from './NameContactDialog';
 import TranscriptPanel from './TranscriptPanel';
 
 type View = 'live' | 'history';
@@ -46,14 +49,16 @@ export default function Dashboard() {
   const history = useCallHistory(endedCount, view === 'history');
 
   const block = useBlockNumber(history.refresh);
+  const contacts = useContacts(history.refresh);
 
   const requestBlockFromCall = useCallback(
     (call: Call) => {
       if (!call.caller.number) return;
       block.request({
         number: call.caller.number,
-        label: formatPhoneNumber(call.caller.number),
+        label: call.caller.name ?? formatPhoneNumber(call.caller.number),
         callId: call.callId,
+        isFavorite: call.caller.isFavorite,
       });
     },
     [block],
@@ -64,10 +69,35 @@ export default function Dashboard() {
       if (!entry.fromNumber) return;
       block.request({
         number: entry.fromNumber,
-        label: formatPhoneNumber(entry.fromNumber),
+        label: entry.fromName ?? formatPhoneNumber(entry.fromNumber),
+        isFavorite: entry.isFavorite,
       });
     },
     [block],
+  );
+
+  const nameFromCall = useCallback(
+    (call: Call) => {
+      if (!call.caller.number) return;
+      contacts.requestName({
+        number: call.caller.number,
+        label: formatPhoneNumber(call.caller.number),
+        currentName: call.caller.name ?? '',
+      });
+    },
+    [contacts],
+  );
+
+  const nameFromHistory = useCallback(
+    (entry: CallHistoryEntry) => {
+      if (!entry.fromNumber) return;
+      contacts.requestName({
+        number: entry.fromNumber,
+        label: formatPhoneNumber(entry.fromNumber),
+        currentName: entry.fromName ?? '',
+      });
+    },
+    [contacts],
   );
 
   return (
@@ -110,6 +140,15 @@ export default function Dashboard() {
         </div>
       )}
 
+      {contacts.error && (
+        <div className="alert" role="alert">
+          <span>{contacts.error}</span>
+          <button type="button" className="alert__dismiss" onClick={contacts.dismissError}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {block.lastResult && (
         <div className="alert alert--success" role="status">
           <span>{describeBlockResult(block.lastResult)}</span>
@@ -134,7 +173,7 @@ export default function Dashboard() {
               <div className="detail__placeholder">
                 <h2>Waiting for calls</h2>
                 <p>
-                  Incoming calls appear here with a live transcript as the caller speaks.
+                  Incoming calls appear here once the caller has said why they’re calling.
                   {connection !== 'open' && ' Reconnecting to the call stream…'}
                 </p>
               </div>
@@ -142,10 +181,44 @@ export default function Dashboard() {
               <>
                 <header className="detail__header">
                   <div>
-                    <h2>{formatPhoneNumber(selectedCall.caller.number)}</h2>
+                    <h2 className="detail__caller">
+                      <FavoriteStar
+                        isFavorite={selectedCall.caller.isFavorite}
+                        disabled={!selectedCall.caller.number}
+                        pending={contacts.pendingNumber === selectedCall.caller.number}
+                        onToggle={() =>
+                          selectedCall.caller.number &&
+                          contacts.toggleFavorite(
+                            selectedCall.caller.number,
+                            !selectedCall.caller.isFavorite,
+                          )
+                        }
+                        label={
+                          selectedCall.caller.name ??
+                          formatPhoneNumber(selectedCall.caller.number)
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="detail__name-button"
+                        onClick={() => nameFromCall(selectedCall)}
+                        disabled={!selectedCall.caller.number}
+                        title={
+                          selectedCall.caller.number
+                            ? 'Name this caller'
+                            : 'Caller ID was withheld'
+                        }
+                      >
+                        {selectedCall.caller.name ??
+                          formatPhoneNumber(selectedCall.caller.number)}
+                      </button>
+                    </h2>
                     <p className="detail__subtitle">
                       {[
-                        selectedCall.caller.name,
+                        // Name is the headline, so the number belongs here.
+                        selectedCall.caller.name
+                          ? formatPhoneNumber(selectedCall.caller.number)
+                          : null,
                         describeLocation(selectedCall.caller.city, selectedCall.caller.country),
                         `started ${formatClock(selectedCall.startedAt)}`,
                       ]
@@ -187,6 +260,11 @@ export default function Dashboard() {
             error={history.error}
             onRefresh={history.refresh}
             onBlock={requestBlockFromHistory}
+            onToggleFavorite={(entry) =>
+              entry.fromNumber && contacts.toggleFavorite(entry.fromNumber, !entry.isFavorite)
+            }
+            onName={nameFromHistory}
+            pendingNumber={contacts.pendingNumber}
           />
         </main>
       )}
@@ -196,6 +274,13 @@ export default function Dashboard() {
         title="Block this caller?"
         message={
           <>
+            {/* Someone deliberately starred this caller. Blocking them is
+                probably a misclick, and this is the last chance to catch it. */}
+            {block.target?.isFavorite && (
+              <p className="dialog__alarm">
+                ★ This caller is a favourite.
+              </p>
+            )}
             <p>
               Are you sure you want to block <strong>{block.target?.label}</strong>?
             </p>
@@ -213,6 +298,15 @@ export default function Dashboard() {
         error={block.error}
         onConfirm={block.confirm}
         onCancel={block.cancel}
+      />
+
+      <NameContactDialog
+        target={contacts.nameTarget}
+        pending={contacts.namePending}
+        error={contacts.nameError}
+        onSave={contacts.saveName}
+        onClear={contacts.clearName}
+        onCancel={contacts.cancelName}
       />
     </div>
   );

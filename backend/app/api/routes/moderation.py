@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import (
     BlocklistDep,
+    ContactsDep,
     HistoryDep,
     RegistryDep,
     SettingsDep,
@@ -119,6 +120,7 @@ async def list_blocked_numbers(blocklist: BlocklistDep) -> list[BlockedNumberOut
 async def call_history(
     history: HistoryDep,
     blocklist: BlocklistDep,
+    contacts: ContactsDep,
     settings: SettingsDep,
     limit: int | None = Query(default=None, ge=1, le=500),
 ) -> list[CallHistoryEntry]:
@@ -131,4 +133,5 @@ async def call_history(
     return await history.recent(
         limit=limit or settings.call_history_page_size,
         blocked=blocklist.snapshot(),
+        contacts=contacts.snapshot(),
     )

@@ -1,4 +1,5 @@
 import { formatClock, formatDuration, formatPhoneNumber } from '../lib/format';
+import FavoriteStar from './FavoriteStar';
 import type { CallHistoryEntry } from '../types/events';
 
 interface Props {
@@ -7,6 +8,9 @@ interface Props {
   error: string | null;
   onRefresh: () => void;
   onBlock: (entry: CallHistoryEntry) => void;
+  onToggleFavorite: (entry: CallHistoryEntry) => void;
+  onName: (entry: CallHistoryEntry) => void;
+  pendingNumber: string | null;
 }
 
 /**
@@ -20,7 +24,16 @@ interface Props {
  * already hung up, which is the common case: by the time you decide someone
  * needs blocking, the call is usually over.
  */
-export default function CallHistoryView({ entries, loading, error, onRefresh, onBlock }: Props) {
+export default function CallHistoryView({
+  entries,
+  loading,
+  error,
+  onRefresh,
+  onBlock,
+  onToggleFavorite,
+  onName,
+  pendingNumber,
+}: Props) {
   return (
     <section className="history" aria-label="Call history">
       <header className="history__header">
@@ -63,7 +76,14 @@ export default function CallHistoryView({ entries, loading, error, onRefresh, on
             </thead>
             <tbody>
               {entries.map((entry) => (
-                <HistoryRow key={entry.callId} entry={entry} onBlock={onBlock} />
+                <HistoryRow
+                  key={entry.callId}
+                  entry={entry}
+                  onBlock={onBlock}
+                  onToggleFavorite={onToggleFavorite}
+                  onName={onName}
+                  pendingNumber={pendingNumber}
+                />
               ))}
             </tbody>
           </table>
@@ -76,11 +96,18 @@ export default function CallHistoryView({ entries, loading, error, onRefresh, on
 function HistoryRow({
   entry,
   onBlock,
+  onToggleFavorite,
+  onName,
+  pendingNumber,
 }: {
   entry: CallHistoryEntry;
   onBlock: (entry: CallHistoryEntry) => void;
+  onToggleFavorite: (entry: CallHistoryEntry) => void;
+  onName: (entry: CallHistoryEntry) => void;
+  pendingNumber: string | null;
 }) {
   const canBlock = Boolean(entry.fromNumber) && !entry.isBlocked;
+  const label = entry.fromName ?? formatPhoneNumber(entry.fromNumber);
 
   return (
     <tr>
@@ -90,12 +117,31 @@ function HistoryRow({
       </td>
 
       <td>
-        <span className="history__number">{formatPhoneNumber(entry.fromNumber)}</span>
-        {(entry.fromName || entry.fromLocation) && (
-          <span className="history__caller-meta">
-            {[entry.fromName, entry.fromLocation].filter(Boolean).join(' · ')}
-          </span>
-        )}
+        <span className="history__caller">
+          <FavoriteStar
+            isFavorite={entry.isFavorite}
+            disabled={!entry.fromNumber}
+            pending={pendingNumber === entry.fromNumber}
+            onToggle={() => onToggleFavorite(entry)}
+            label={label}
+          />
+          {/* Clicking the caller opens the naming dialog -- the action people
+              reach for right after recognising someone in the log. */}
+          <button
+            type="button"
+            className="history__number-button"
+            onClick={() => onName(entry)}
+            disabled={!entry.fromNumber}
+            title={entry.fromNumber ? `Name ${label}` : 'Caller ID was withheld'}
+          >
+            {entry.fromName ?? formatPhoneNumber(entry.fromNumber)}
+          </button>
+        </span>
+        <span className="history__caller-meta">
+          {[entry.fromName ? formatPhoneNumber(entry.fromNumber) : null, entry.fromLocation]
+            .filter(Boolean)
+            .join(' · ')}
+        </span>
       </td>
 
       <td>

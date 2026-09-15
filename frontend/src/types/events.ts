@@ -29,9 +29,11 @@ export function isTerminal(status: CallStatus): boolean {
 
 export interface Caller {
   number: string | null;
+  /** Saved contact name if there is one, else the carrier's caller ID. */
   name: string | null;
   city: string | null;
   country: string | null;
+  isFavorite: boolean;
 }
 
 export interface Call {
@@ -108,6 +110,8 @@ export interface CallHistoryEntry {
   transcriptSummary: string;
   /** Whether this caller is already on the blocklist. */
   isBlocked: boolean;
+  /** Starred right now — resolved server-side at read time. */
+  isFavorite: boolean;
 }
 
 export interface BlockedNumber {
@@ -130,4 +134,13 @@ export interface BlockNumberResult {
   newlyBlocked: boolean;
   terminatedCallIds: string[];
   failedCallIds: string[];
+}
+
+/** A number the team has put its own label on: a name, a star, or both. */
+export interface Contact {
+  number: string;
+  displayName: string | null;
+  isFavorite: boolean;
+  createdAt: string;
+  updatedAt: string;
 }

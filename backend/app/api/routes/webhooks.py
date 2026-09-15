@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from app.api.deps import BlocklistDep, HistoryDep, RegistryDep, SettingsDep
+from app.api.deps import BlocklistDep, ContactsDep, HistoryDep, RegistryDep, SettingsDep
 from app.schemas.calls import Call, Caller, CallStatus
 from app.telephony import answer_and_gather, hold, reject
 from app.telephony.signature import verify_twilio_signature
@@ -98,6 +98,7 @@ async def incoming_call(
     settings: SettingsDep,
     blocklist: BlocklistDep,
     history: HistoryDep,
+    contacts: ContactsDep,
 ) -> Response:
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -105,11 +106,15 @@ async def incoming_call(
     # Twilio's own id, falling back to a generated one so a malformed payload
     # still produces a traceable call rather than a 500.
     call_id = params.get("CallSid") or f"local-{uuid.uuid4().hex[:12]}"
+    number = params.get("From") or None
     caller = Caller(
-        number=params.get("From") or None,
-        name=params.get("CallerName") or None,
+        number=number,
+        # A saved contact name beats the carrier's caller ID, which is often
+        # stale or generic ("WIRELESS CALLER").
+        name=contacts.resolve_name(number, params.get("CallerName") or None),
         city=params.get("FromCity") or None,
         country=params.get("FromCountry") or None,
+        is_favorite=contacts.is_favorite(number),
     )
 
     # Blocklist first, before anything expensive. An in-memory set lookup, so

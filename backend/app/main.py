@@ -19,13 +19,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import calls, frontend, health, moderation, webhooks
+from app.api.routes import calls, contacts, frontend, health, moderation, webhooks
 from app.config import Settings, get_settings
 from app.db.session import Database
 from app.services.blocklist import BlocklistService
 from app.services.broadcaster import Broadcaster
 from app.services.call_history import CallHistoryRepository
 from app.services.call_registry import CallRegistry
+from app.services.contacts import ContactsService
 from app.telephony.provider_client import create_telephony_client
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -59,6 +60,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await blocklist.load()
     app.state.blocklist = blocklist
 
+    contact_book = ContactsService(database)
+    await contact_book.load()
+    app.state.contacts = contact_book
+
     app.state.telephony = create_telephony_client(settings)
 
     broadcaster = Broadcaster(queue_max=settings.frontend_queue_max)
@@ -66,9 +71,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.registry = CallRegistry(broadcaster=broadcaster, history=history)
 
     log.info(
-        "call screener up env=%s blocked=%s public=%s",
+        "call screener up env=%s blocked=%s contacts=%s public=%s",
         settings.app_env,
         blocklist.size,
+        contact_book.size,
         settings.public_base_url,
     )
     if app.state.telephony.is_placeholder:
@@ -116,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks.router)
     app.include_router(calls.router)
     app.include_router(moderation.router)
+    app.include_router(contacts.router)
     app.include_router(frontend.router)
 
     # Serves the greeting MP3 when GREETING_AUDIO_URL is unset. Fine for local

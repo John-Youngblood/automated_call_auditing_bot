@@ -58,9 +58,13 @@ TERMINAL_STATUSES = frozenset(
 
 class Caller(CamelModel):
     number: str | None = None
+    #: Saved contact name if there is one, else the carrier's caller ID.
     name: str | None = None
     city: str | None = None
     country: str | None = None
+    #: Resolved from the contacts table when the call arrives, so the dashboard
+    #: can render a star without a second lookup per row.
+    is_favorite: bool = False
 
 
 class Call(CamelModel):

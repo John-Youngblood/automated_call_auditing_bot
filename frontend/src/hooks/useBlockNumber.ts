@@ -21,6 +21,8 @@ export interface BlockTarget {
   label: string;
   /** Present when the block was triggered from a live call. */
   callId?: string;
+  /** Starred callers get an extra warning before being blocked. */
+  isFavorite?: boolean;
 }
 
 export interface UseBlockNumber {
