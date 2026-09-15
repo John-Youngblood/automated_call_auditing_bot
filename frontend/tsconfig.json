@@ -1,0 +1,30 @@
+{
+  // Application code only. Deliberately does NOT include node types, so
+  // browser code cannot reach for `process` or `fs` and fail at runtime.
+  // The build tooling is checked separately by tsconfig.node.json.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    // Indexing a Record or array yields `T | undefined`, forcing the missing
+    // cases to be handled -- worth it for state keyed by call id.
+    "noUncheckedIndexedAccess": true,
+
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src"]
+}

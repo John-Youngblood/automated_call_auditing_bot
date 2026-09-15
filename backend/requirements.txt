@@ -1,0 +1,18 @@
+# Pinned to compatible ranges; run `pip freeze > requirements.lock` for deploys.
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0        # [standard] pulls uvloop + httptools + websockets
+pydantic>=2.8,<3.0
+pydantic-settings>=2.4,<3.0
+websockets>=12.0,<16.0             # outbound client socket to Deepgram
+httpx>=0.27,<1.0
+python-multipart>=0.0.9,<1.0       # Twilio posts application/x-www-form-urlencoded
+
+# Persistence for the blocklist and call history. Async driver on purpose:
+# a sync DB call would block the event loop that is also pumping call audio.
+sqlalchemy[asyncio]>=2.0,<3.0
+aiosqlite>=0.20,<1.0
+
+# Alternative to the hand-rolled Deepgram websocket client in
+# app/services/deepgram.py. The scaffold uses raw websockets so the wire
+# protocol stays visible; swap in the SDK if you prefer.
+# deepgram-sdk>=3.7,<5.0

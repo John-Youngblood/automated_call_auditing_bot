@@ -1,0 +1,55 @@
+"""Shared dependencies.
+
+Long-lived singletons hang off ``app.state`` (populated in the lifespan) rather
+than module globals, so tests can build an isolated app per test and nothing
+leaks between them.
+
+``HTTPConnection`` is the common base of ``Request`` and ``WebSocket``, which
+lets one dependency serve both HTTP routes and websocket routes.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import Depends
+from starlette.requests import HTTPConnection
+
+from app.config import Settings, get_settings
+from app.services.blocklist import BlocklistService
+from app.services.broadcaster import Broadcaster
+from app.services.call_history import CallHistoryRepository
+from app.services.call_registry import CallRegistry
+from app.telephony.provider_client import TelephonyClient
+
+
+def provide_settings() -> Settings:
+    return get_settings()
+
+
+def provide_broadcaster(conn: HTTPConnection) -> Broadcaster:
+    return conn.app.state.broadcaster
+
+
+def provide_registry(conn: HTTPConnection) -> CallRegistry:
+    return conn.app.state.registry
+
+
+def provide_blocklist(conn: HTTPConnection) -> BlocklistService:
+    return conn.app.state.blocklist
+
+
+def provide_history(conn: HTTPConnection) -> CallHistoryRepository:
+    return conn.app.state.history
+
+
+def provide_telephony(conn: HTTPConnection) -> TelephonyClient:
+    return conn.app.state.telephony
+
+
+SettingsDep = Annotated[Settings, Depends(provide_settings)]
+BroadcasterDep = Annotated[Broadcaster, Depends(provide_broadcaster)]
+RegistryDep = Annotated[CallRegistry, Depends(provide_registry)]
+BlocklistDep = Annotated[BlocklistService, Depends(provide_blocklist)]
+HistoryDep = Annotated[CallHistoryRepository, Depends(provide_history)]
+TelephonyDep = Annotated[TelephonyClient, Depends(provide_telephony)]

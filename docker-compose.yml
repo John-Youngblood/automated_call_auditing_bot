@@ -1,0 +1,85 @@
+# Local development stack: FastAPI backend + Vite/React dashboard.
+#
+#   docker compose up --build
+#     dashboard -> http://localhost:5173
+#     api docs  -> http://localhost:8000/docs
+#
+# Both services bind-mount their source and run in watch mode, so edits on the
+# host reload in place. For the provider webhook to reach the backend you also
+# need a public tunnel (see README) -- containers are not internet-reachable.
+name: call-screener
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      # Absolute path onto the named volume below. Without this the SQLite file
+      # lands on the container's writable layer and a rebuild silently empties
+      # the blocklist -- unblocking every caller a moderator ever blocked.
+      DATABASE_URL: sqlite+aiosqlite:////srv/data/call_screener.db
+    ports:
+      # Override in .env if the host port is taken.
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # Source only. .venv / site-packages live in the image, not the mount.
+      - ./backend/app:/srv/app
+      - ./backend/tests:/srv/tests
+      # Blocklist and call history survive `docker compose down` and rebuilds.
+      - call-screener-data:/srv/data
+    # Deliberately ONE worker. Call state and the dashboard fan-out hub are
+    # in-process, so a second worker would see a different set of calls. To
+    # scale horizontally, move the hub onto Redis pub/sub first (see
+    # app/services/broadcaster.py).
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /srv/app
+      --ws-ping-interval 20
+      --ws-ping-timeout 20
+      --timeout-graceful-shutdown 10
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2).status==200 else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    env_file:
+      - .env
+    environment:
+      # The Vite dev server proxies /api + /ws here, so the browser only ever
+      # talks to one origin. Keeps cookies same-site and CORS out of the way.
+      BACKEND_ORIGIN: http://backend:8000
+      # Bind-mounted source on macOS/Windows needs polling for reliable HMR.
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/srv
+      # Anonymous volume: keeps the image's node_modules from being shadowed
+      # by the host bind-mount (host may have none, or wrong-arch binaries).
+      - /srv/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # Moderation state. Removed only by `docker compose down -v`, which is the
+  # one command that will wipe the blocklist.
+  call-screener-data:
