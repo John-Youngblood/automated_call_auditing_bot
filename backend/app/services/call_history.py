@@ -4,9 +4,6 @@ Written once per call, when it reaches a terminal status, keyed by the
 provider's call id so repeated terminal transitions (rejected, then the
 provider's status callback arriving) upsert instead of duplicating.
 
-Only *committed* transcript lines are stored. Interim hypotheses are
-provisional by definition and would leave half-recognised words in the
-permanent record.
 """
 
 from __future__ import annotations
@@ -44,9 +41,6 @@ class CallHistoryRepository:
             logger.exception("could not record call history for call_id=%s", call.call_id)
 
     async def _record(self, call: Call) -> None:
-        final_lines = [line.text for line in call.transcript if line.is_final and line.text]
-        transcript = "\n".join(final_lines)
-
         duration = None
         if call.ended_at is not None:
             duration = max(0, int((call.ended_at - call.started_at).total_seconds()))
@@ -69,8 +63,7 @@ class CallHistoryRepository:
             row.started_at = call.started_at
             row.ended_at = call.ended_at
             row.duration_seconds = duration
-            row.transcript = transcript or None
-            row.transcript_line_count = len(final_lines)
+            row.transcript = call.transcript or None
 
     async def recent(
         self, limit: int = 100, blocked: frozenset[str] | None = None
@@ -127,6 +120,5 @@ def _to_schema(row: CallHistory, blocked: frozenset[str]) -> CallHistoryEntry:
         ended_at=row.ended_at,
         duration_seconds=row.duration_seconds,
         transcript_summary=summarize(row.transcript),
-        transcript_line_count=row.transcript_line_count,
         is_blocked=row.from_number is not None and row.from_number in blocked,
     )

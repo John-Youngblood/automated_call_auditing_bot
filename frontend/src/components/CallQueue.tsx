@@ -71,9 +71,9 @@ interface RowProps {
 }
 
 function QueueRow({ call, selected, onSelect, now }: RowProps) {
-  // The latest line doubles as a preview, so an agent can triage from the list
-  // without opening every call.
-  const latest = call.transcript.at(-1);
+  // The transcript doubles as a preview, so an operator can triage from the
+  // list without opening every call.
+  const preview = call.transcript ?? (call.status === 'ringing' ? 'Still speaking…' : null);
 
   return (
     <li>
@@ -98,7 +98,7 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
           <span className={`status status--${call.status}`}>{call.status}</span>
           {call.caller.name && <span className="call-row__name">{call.caller.name}</span>}
         </span>
-        {latest && <span className="call-row__preview">{latest.text}</span>}
+        {preview && <span className="call-row__preview">{preview}</span>}
       </button>
     </li>
   );

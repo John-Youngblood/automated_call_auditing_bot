@@ -63,7 +63,6 @@ class CallHistoryEntry(CamelModel):
     duration_seconds: int | None = None
     #: Truncated transcript for the list view.
     transcript_summary: str = ""
-    transcript_line_count: int = 0
     #: Whether this caller is on the blocklist right now, so the history view
     #: can disable a Block button that would be a no-op.
     is_blocked: bool = False

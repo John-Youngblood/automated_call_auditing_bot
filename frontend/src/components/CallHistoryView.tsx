@@ -107,12 +107,7 @@ function HistoryRow({
 
       <td className="history__transcript">
         {entry.transcriptSummary ? (
-          <>
-            <span>{entry.transcriptSummary}</span>
-            {entry.transcriptLineCount > 0 && (
-              <span className="history__lines">{entry.transcriptLineCount} lines</span>
-            )}
-          </>
+          <span>{entry.transcriptSummary}</span>
         ) : (
           <span className="history__no-transcript">No transcript</span>
         )}

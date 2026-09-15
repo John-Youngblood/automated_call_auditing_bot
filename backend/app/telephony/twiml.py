@@ -1,78 +1,119 @@
-"""TwiML (Twilio, XML) renderer."""
+"""TwiML: the XML documents Twilio takes as call-control instructions.
+
+Twilio-only, deliberately. An earlier version of this package had a provider
+abstraction with a Vonage renderer beside this one, but only the response
+dialect was ever implemented -- frame parsing, signature verification and
+outbound audio all assumed Twilio -- so "multi-provider" was true of one file
+out of four and false everywhere it mattered. Supporting a second provider is
+a real project; pretending to support one is worse than not.
+
+Three documents, one per moment in a screened call:
+
+    answer_and_gather()  greet, then listen for why they are calling
+    hold()               park them while an operator reads the transcript
+    reject()             refuse a blocked caller outright
+
+Built with ElementTree rather than f-strings: caller-supplied values end up in
+these documents, and string-built XML is an injection waiting to happen.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from xml.etree.ElementTree import Element, SubElement, tostring
 
-from app.telephony.base import CallPlan, RenderedResponse
+
+@dataclass(slots=True)
+class RenderedResponse:
+    body: str
+    media_type: str = "application/xml"
 
 
 def _document(response: Element) -> RenderedResponse:
     xml = tostring(response, encoding="unicode", short_empty_elements=True)
-    return RenderedResponse(
-        body=f'<?xml version="1.0" encoding="UTF-8"?>{xml}',
-        media_type="application/xml",
-    )
+    return RenderedResponse(body=f'<?xml version="1.0" encoding="UTF-8"?>{xml}')
 
 
-class TwimlRenderer:
-    """Builds the XML document Twilio expects from a voice webhook.
-
-    Produces::
+def answer_and_gather(
+    *,
+    greeting_url: str,
+    action_url: str,
+    speech_model: str = "phone_call",
+    language: str = "en-US",
+) -> RenderedResponse:
+    """Greet the caller, then listen for why they are calling.
 
         <Response>
-          <Play>https://host/static/greeting.mp3</Play>
-          <Connect>
-            <Stream url="wss://host/ws/audio-stream">
-              <Parameter name="callId" value="CAxxxx"/>
-            </Stream>
-          </Connect>
+          <Gather input="speech" action="…" speechTimeout="auto"
+                  actionOnEmptyResult="true">
+            <Play>…/greeting.mp3</Play>
+          </Gather>
+          <Redirect>…</Redirect>
         </Response>
 
-    Two things worth knowing:
+    ``<Play>`` sits *inside* ``<Gather>`` so the greeting doubles as the prompt
+    and Twilio is already listening as it finishes -- a caller who talks over
+    the greeting is still heard.
 
-    * ``<Connect><Stream>`` is the **two-way** verb -- Twilio forwards caller
-      audio to the socket *and* plays back media frames the socket sends. The
-      similar-looking ``<Start><Stream>`` is a one-way fork and cannot talk
-      back, so it is the wrong verb for screening.
-    * ``<Connect>`` blocks the call until the websocket closes, so it must come
-      last. ``<Play>`` finishes before the stream opens, which is why the
-      greeting is heard in full before transcription starts.
+    ``speechTimeout="auto"`` is what makes this turn-based: Twilio decides when
+    the caller has stopped and posts the finished transcript to ``action_url``.
+    That end-of-speech detection is the entire reason this design needs no
+    audio streaming.
 
-    The document is assembled with ElementTree rather than f-strings: caller
-    names and numbers end up in attributes, and string-built XML is an
-    injection waiting to happen.
+    ``actionOnEmptyResult`` makes the action fire even when the caller says
+    nothing, so a silent call still reaches the dashboard rather than hanging.
+    The trailing ``<Redirect>`` covers the same risk from the other side: if
+    ``<Gather>`` ever falls through, the call lands on the same endpoint
+    instead of running off the end of the document, which would hang up on
+    a caller who is still waiting.
     """
+    response = Element("Response")
 
-    name = "twilio"
+    gather = SubElement(
+        response,
+        "Gather",
+        {
+            "input": "speech",
+            "action": action_url,
+            "method": "POST",
+            "speechTimeout": "auto",
+            "speechModel": speech_model,
+            "language": language,
+            "actionOnEmptyResult": "true",
+        },
+    )
+    SubElement(gather, "Play").text = greeting_url
 
-    def render(self, plan: CallPlan) -> RenderedResponse:
-        response = Element("Response")
+    redirect = SubElement(response, "Redirect", {"method": "POST"})
+    redirect.text = action_url
 
-        play = SubElement(response, "Play")
-        play.text = plan.greeting_url
+    return _document(response)
 
-        connect = SubElement(response, "Connect")
-        stream = SubElement(connect, "Stream", {"url": plan.stream_url})
-        for key, value in plan.stream_parameters.items():
-            SubElement(stream, "Parameter", {"name": key, "value": str(value)})
 
-        return _document(response)
+def hold(queue_name: str) -> RenderedResponse:
+    """Park the caller while an operator reads their transcript.
 
-    def render_reject(self, reason: str = "rejected") -> RenderedResponse:
-        """``<Reject>`` -- refuse the call without answering it.
+    ``<Enqueue>`` earns its place: one verb holds the call open indefinitely
+    with Twilio's built-in hold music -- no queue to pre-create, no hold audio
+    to host, and no redirect loop to keep alive. Accepting the call dequeues
+    it.
+    """
+    response = Element("Response")
+    SubElement(response, "Enqueue").text = queue_name
+    return _document(response)
 
-        This is the cheap path, and the reason it matters: Twilio never
-        connects the call, so there is no answered leg, no media stream, no
-        Deepgram session, and no per-minute charge. Answering and then hanging
-        up would bill for the answered call and spin up a transcription
-        connection for a caller nobody wants to hear.
 
-        ``reason`` is "rejected" (the caller hears a "not accepting calls"
-        treatment) or "busy" (a busy signal). Busy is the quieter option: it
-        looks like an ordinary failed call rather than a deliberate block,
-        which is often what you want with a hostile caller.
-        """
-        response = Element("Response")
-        SubElement(response, "Reject", {"reason": reason})
-        return _document(response)
+def reject(reason: str = "rejected") -> RenderedResponse:
+    """Refuse a blocked caller without answering.
+
+    The cheap path, and the reason it matters: Twilio never connects the call,
+    so there is no answered leg and no per-minute charge. Answering and then
+    hanging up would bill for the call.
+
+    ``reason`` is "rejected" (a not-accepting-calls treatment) or "busy" (a
+    busy signal). Busy is the quieter option -- it looks like an ordinary
+    failed call rather than a deliberate block.
+    """
+    response = Element("Response")
+    SubElement(response, "Reject", {"reason": reason})
+    return _document(response)

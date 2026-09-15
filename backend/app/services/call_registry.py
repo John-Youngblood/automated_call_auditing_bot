@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from app.schemas.calls import TERMINAL_STATUSES, Call, Caller, CallStatus, TranscriptLine
+from app.schemas.calls import TERMINAL_STATUSES, Call, Caller, CallStatus
 from app.schemas.events import ServerEvent, ServerEventType
 from app.services.broadcaster import Broadcaster
 from app.services.call_history import CallHistoryRepository
@@ -42,16 +42,12 @@ class CallRegistry:
     def __init__(
         self,
         broadcaster: Broadcaster,
-        transcript_history_max: int = 400,
         history: CallHistoryRepository | None = None,
     ) -> None:
         self._broadcaster = broadcaster
-        self._history_max = transcript_history_max
         #: Optional so tests and tooling can build a registry with no database.
         self._history = history
         self._calls: dict[str, Call] = {}
-        #: Next transcript segment id, per call.
-        self._next_segment: dict[str, int] = {}
 
     # -- reads --------------------------------------------------------------
     def get(self, call_id: str) -> Call | None:
@@ -92,70 +88,33 @@ class CallRegistry:
 
         call = Call(call_id=call_id, caller=caller or Caller(), to_number=to_number)
         self._calls[call_id] = call
-        self._next_segment[call_id] = 0
         logger.info("call queued call_id=%s from=%s", call_id, call.caller.number)
         self._publish(ServerEventType.CALL_INCOMING, call)
         return call
 
-    def attach_stream(self, call_id: str, stream_id: str) -> Call:
-        """Bind a provider media stream, creating the call if the websocket
-        beat the webhook (rare, but it does happen under retries)."""
-        call = self._calls.get(call_id)
-        if call is None:
-            logger.warning("media stream for unknown call_id=%s; creating placeholder", call_id)
-            call = self.register_incoming(call_id)
-        call.stream_id = stream_id
-        if call.status is CallStatus.RINGING:
-            call.status = CallStatus.SCREENING
-        self._publish(ServerEventType.CALL_UPDATED, call)
-        return call
+    async def set_transcript(
+        self, call_id: str, text: str, confidence: float | None = None
+    ) -> Call | None:
+        """Record what the caller said and move them to awaiting a decision.
 
-    def add_transcript(
-        self,
-        call_id: str,
-        text: str,
-        *,
-        is_final: bool,
-        speaker: str | None = None,
-        confidence: float | None = None,
-        start_time: float | None = None,
-    ) -> TranscriptLine | None:
-        """Append or revise a transcript line and broadcast it.
-
-        Interim results keep re-using the current segment id so the dashboard
-        overwrites the line in place; a final result closes the segment and the
-        next interim starts a fresh one. That is what makes text appear to
-        "settle" as the caller speaks instead of duplicating.
+        Arrives complete, in one webhook, once the caller stops speaking --
+        so there is nothing partial to reconcile and no ordering to get right.
         """
         call = self._calls.get(call_id)
         if call is None:
-            logger.warning("transcript for unknown call_id=%s, dropping", call_id)
-            return None
-        if not text:
+            logger.warning("speech result for unknown call_id=%s, dropping", call_id)
             return None
 
-        segment_id = self._next_segment.get(call_id, 0)
-        line = TranscriptLine(
-            segment_id=segment_id,
-            text=text,
-            is_final=is_final,
-            speaker=speaker,
-            confidence=confidence,
-            start_time=start_time,
+        call.transcript = text or None
+        call.transcript_confidence = confidence
+        if call.status is CallStatus.RINGING:
+            call.status = CallStatus.SCREENING
+
+        logger.info(
+            "transcript call_id=%s confidence=%s chars=%s", call_id, confidence, len(text or "")
         )
-
-        if call.transcript and call.transcript[-1].segment_id == segment_id:
-            call.transcript[-1] = line
-        else:
-            call.transcript.append(line)
-        if len(call.transcript) > self._history_max:
-            del call.transcript[: len(call.transcript) - self._history_max]
-
-        if is_final:
-            self._next_segment[call_id] = segment_id + 1
-
-        self._broadcaster.publish(ServerEvent.transcript(call_id, line).to_wire())
-        return line
+        self._publish(ServerEventType.CALL_UPDATED, call)
+        return call
 
     async def set_status(self, call_id: str, status: CallStatus) -> Call:
         call = self.require(call_id)
@@ -192,7 +151,6 @@ class CallRegistry:
         if call.status not in (CallStatus.ACCEPTED, CallStatus.REJECTED, CallStatus.BLOCKED):
             call.status = CallStatus.ENDED
         self._publish(ServerEventType.CALL_ENDED, call)
-        self._next_segment.pop(call_id, None)
         await self._persist(call, call.status)
         return call
 
@@ -215,7 +173,6 @@ class CallRegistry:
     def forget(self, call_id: str) -> None:
         """Evict a finished call from memory (call from a reaper task)."""
         self._calls.pop(call_id, None)
-        self._next_segment.pop(call_id, None)
 
     def publish(self, event: ServerEvent) -> None:
         """Publish an event that is not itself a state change (stream health,

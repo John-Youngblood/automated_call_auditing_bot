@@ -28,7 +28,6 @@ export default function Dashboard() {
 
   const {
     connection,
-    sttState,
     lastError,
     activeCalls,
     recentCalls,
@@ -76,7 +75,7 @@ export default function Dashboard() {
       <header className="app__header">
         <div className="app__brand">
           <h1>Call Screener</h1>
-          <p>Live transcription and call triage</p>
+          <p>Call screening and moderation</p>
         </div>
 
         <nav className="tabs" aria-label="Views">
@@ -99,7 +98,7 @@ export default function Dashboard() {
           </button>
         </nav>
 
-        <ConnectionBadge status={connection} sttState={sttState} />
+        <ConnectionBadge status={connection} />
       </header>
 
       {lastError && (
@@ -167,11 +166,7 @@ export default function Dashboard() {
                   </div>
                 </header>
 
-                <TranscriptPanel
-                  lines={selectedCall.transcript}
-                  callId={selectedCall.callId}
-                  live={selectedCall.status === 'screening' || selectedCall.status === 'ringing'}
-                />
+                <TranscriptPanel call={selectedCall} />
 
                 <CallActions
                   call={selectedCall}

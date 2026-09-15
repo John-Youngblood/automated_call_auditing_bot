@@ -105,11 +105,8 @@ class CallHistory(Base):
     ended_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    #: Full committed transcript, newline-separated. Text rather than a child
-    #: table: it is only ever read back whole, and a call produces tens of
-    #: lines, not thousands.
+    #: What the caller said when asked why they were calling.
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
-    transcript_line_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow, nullable=False)
 

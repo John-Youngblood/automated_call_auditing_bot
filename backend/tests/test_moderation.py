@@ -24,17 +24,17 @@ def ring(client: TestClient, **overrides: str) -> str:
 
 
 class TestBlocklistGate:
-    def test_blocked_caller_is_refused_without_a_media_stream(self, client: TestClient) -> None:
+    def test_blocked_caller_is_refused_without_being_answered(self, client: TestClient) -> None:
         client.post("/api/block-number", json={"number": BLOCKED_CALLER})
 
         body = ring(client)
 
         root = fromstring(body)
         assert [child.tag for child in root] == ["Reject"]
-        # The important negatives: no greeting, no stream, so no Deepgram
-        # session is opened and no per-minute charge is incurred.
-        assert root.find("Play") is None
-        assert root.find("Connect") is None
+        # The important negatives: never answered, so no greeting plays, no
+        # transcription is requested, and no per-minute charge is incurred.
+        assert root.find("Gather") is None
+        assert root.find("Enqueue") is None
 
     def test_blocked_caller_never_reaches_the_live_queue(self, client: TestClient) -> None:
         client.post("/api/block-number", json={"number": BLOCKED_CALLER})
@@ -58,7 +58,8 @@ class TestBlocklistGate:
     def test_unblocked_caller_still_gets_the_normal_treatment(self, client: TestClient) -> None:
         root = fromstring(ring(client))
 
-        assert [child.tag for child in root] == ["Play", "Connect"]
+        assert root.find("Gather") is not None
+        assert root.find("Reject") is None
         assert len(client.get("/api/calls").json()) == 1
 
     def test_block_matches_regardless_of_formatting(self, client: TestClient) -> None:
@@ -73,7 +74,7 @@ class TestBlocklistGate:
         client.post("/api/block-number", json={"number": BLOCKED_CALLER})
 
         root = fromstring(ring(client, CallSid="CA-anon", From=""))
-        assert root.find("Connect") is not None
+        assert root.find("Gather") is not None
 
     def test_reject_reason_is_configurable(self, make_client) -> None:
         with make_client(BLOCKED_CALL_REJECT_REASON="busy") as client:
@@ -81,16 +82,6 @@ class TestBlocklistGate:
             root = fromstring(ring(client))
 
         assert root.find("Reject").attrib["reason"] == "busy"
-
-    def test_vonage_refuses_with_an_empty_ncco(self, make_client) -> None:
-        with make_client(TELEPHONY_PROVIDER="vonage") as client:
-            client.post("/api/block-number", json={"number": BLOCKED_CALLER})
-            response = client.post(
-                "/webhook/incoming-call",
-                json={"uuid": "vg-blocked", "from": "15550192834", "to": "15039990000"},
-            )
-
-        assert response.json() == []
 
 
 class TestBlockEndpoint:

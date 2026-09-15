@@ -16,17 +16,8 @@ async def healthz() -> dict[str, str]:
 
 @router.get("/readyz", summary="Readiness probe")
 async def readyz(settings: SettingsDep) -> dict[str, object]:
-    """Ready means "safe to send traffic to".
-
-    Deliberately does not fail on a missing Deepgram key: transcription
-    degrades, but the service can still answer calls, and refusing traffic
-    would drop calls entirely.
-    """
-    return {
-        "status": "ok",
-        "provider": settings.telephony_provider,
-        "sttMode": "deepgram" if settings.stt_enabled else "mock",
-    }
+    """Ready means "safe to send traffic to"."""
+    return {"status": "ok", "signatureChecks": settings.validate_webhook_signature}
 
 
 @router.get("/api/stats", summary="Live counters for debugging")

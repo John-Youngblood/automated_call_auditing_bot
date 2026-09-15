@@ -23,14 +23,8 @@ BASE_ENV = {
     "DATABASE_URL": "sqlite+aiosqlite://",
     "LOG_LEVEL": "WARNING",
     "PUBLIC_BASE_URL": "https://calls.example.test",
-    "TELEPHONY_PROVIDER": "twilio",
     "VALIDATE_WEBHOOK_SIGNATURE": "false",
     "GREETING_AUDIO_URL": "",
-    "STT_MOCK": "true",
-    "DEEPGRAM_API_KEY": "",
-    "STT_ENCODING": "mulaw",
-    "STT_SAMPLE_RATE": "8000",
-    "STT_CHANNELS": "1",
 }
 
 

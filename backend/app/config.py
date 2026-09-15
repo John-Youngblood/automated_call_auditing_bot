@@ -13,8 +13,6 @@ from typing import Literal
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-TelephonyProvider = Literal["twilio", "vonage"]
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -34,21 +32,19 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:8000"
 
     # --- Telephony ---------------------------------------------------------
-    telephony_provider: TelephonyProvider = "twilio"
     greeting_audio_url: str = ""
+
+    #: Twilio's speech model and language for <Gather input="speech">.
+    #: "phone_call" is tuned for 8kHz telephony audio; the default model is
+    #: trained on wideband and does noticeably worse down a phone line.
+    speech_model: str = "phone_call"
+    speech_language: str = "en-US"
+
+    #: Twilio queue callers wait in while an operator reads their transcript.
+    #: Created on demand -- nothing to set up in the console.
+    hold_queue_name: str = "screening"
     validate_webhook_signature: bool = False
     twilio_auth_token: str = ""
-
-    # --- Speech-to-text ----------------------------------------------------
-    deepgram_api_key: str = ""
-    deepgram_model: str = "nova-3"
-    deepgram_language: str = "en-US"
-    stt_encoding: str = "mulaw"
-    stt_sample_rate: int = 8000
-    stt_channels: int = 1
-    #: Emit synthetic transcripts instead of calling Deepgram. Default on so
-    #: the stack runs end-to-end with no credentials.
-    stt_mock: bool = True
 
     #: Where an accepted call is bridged to. A real deployment would look this
     #: up per operator rather than using one station number.
@@ -70,7 +66,6 @@ class Settings(BaseSettings):
 
     # --- Dashboard fan-out -------------------------------------------------
     frontend_queue_max: int = Field(default=250, ge=1)
-    transcript_history_max: int = Field(default=400, ge=1)
     cors_allow_origins: str = "http://localhost:5173"
 
     @computed_field  # type: ignore[prop-decorator]
@@ -100,12 +95,6 @@ class Settings(BaseSettings):
         if self.greeting_audio_url:
             return self.greeting_audio_url
         return f"{self.public_base_url.rstrip('/')}/static/greeting.mp3"
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def stt_enabled(self) -> bool:
-        """Whether a real Deepgram connection should be attempted."""
-        return bool(self.deepgram_api_key) and not self.stt_mock
 
 
 @lru_cache(maxsize=1)

@@ -11,26 +11,17 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 
 import { ApiError, callsApi } from '../lib/api';
 import { ReconnectingSocket, resolveWebSocketUrl } from '../lib/websocket';
-import type { Call, ConnectionStatus, ServerEvent, TranscriptLine } from '../types/events';
+import type { Call, ConnectionStatus, ServerEvent } from '../types/events';
 import { isServerEvent, isTerminal } from '../types/events';
 
 /** Finished calls kept for review before being pruned. */
 const MAX_TERMINAL_CALLS = 20;
-/** Matches the backend's TRANSCRIPT_HISTORY_MAX; bounds memory on long calls. */
-const MAX_TRANSCRIPT_LINES = 400;
 
 interface State {
   connection: ConnectionStatus;
   calls: Record<string, Call>;
   /** Call ids in arrival order; the queue renders from this. */
   order: string[];
-  /**
-   * Transcription-pipeline health per call, e.g. 'connected' | 'degraded'.
-   * Keyed by call id: with several calls in flight, one stream closing says
-   * nothing about the others, and a single global value would report the most
-   * recent event as though it applied to all of them.
-   */
-  sttStateByCall: Record<string, string>;
   lastError: string | null;
   /**
    * Bumped every time a call finishes. The history view is a plain HTTP read,
@@ -43,7 +34,6 @@ const initialState: State = {
   connection: 'connecting',
   calls: {},
   order: [],
-  sttStateByCall: {},
   lastError: null,
   endedCount: 0,
 };
@@ -54,18 +44,10 @@ type Action =
   | { kind: 'error'; message: string | null };
 
 function upsertCall(state: State, call: Call): State {
-  const known = state.order.includes(call.callId);
-  // A snapshot or call.updated carries no transcript history for an
-  // in-progress call, so never let it clobber lines already received.
-  const existing = state.calls[call.callId];
-  const merged: Call = {
-    ...call,
-    transcript: call.transcript.length > 0 ? call.transcript : (existing?.transcript ?? []),
-  };
   return {
     ...state,
-    calls: { ...state.calls, [call.callId]: merged },
-    order: known ? state.order : [...state.order, call.callId],
+    calls: { ...state.calls, [call.callId]: call },
+    order: state.order.includes(call.callId) ? state.order : [...state.order, call.callId],
   };
 }
 
@@ -78,35 +60,8 @@ function pruneTerminal(state: State): State {
 
   const drop = new Set(terminal.slice(0, terminal.length - MAX_TERMINAL_CALLS));
   const calls = { ...state.calls };
-  const sttStateByCall = { ...state.sttStateByCall };
-  for (const id of drop) {
-    delete calls[id];
-    delete sttStateByCall[id];
-  }
-  return {
-    ...state,
-    calls,
-    sttStateByCall,
-    order: state.order.filter((id) => !drop.has(id)),
-  };
-}
-
-function applyTranscriptLine(state: State, callId: string, line: TranscriptLine): State {
-  const call = state.calls[callId];
-  // Transcript for a call we have never seen: ignore rather than invent one.
-  if (!call) return state;
-
-  const lines = [...call.transcript];
-  const index = lines.findIndex((existing) => existing.segmentId === line.segmentId);
-  if (index >= 0) {
-    // Interim revision of a line already on screen -- replace in place.
-    lines[index] = line;
-  } else {
-    lines.push(line);
-  }
-  if (lines.length > MAX_TRANSCRIPT_LINES) lines.splice(0, lines.length - MAX_TRANSCRIPT_LINES);
-
-  return { ...state, calls: { ...state.calls, [callId]: { ...call, transcript: lines } } };
+  for (const id of drop) delete calls[id];
+  return { ...state, calls, order: state.order.filter((id) => !drop.has(id)) };
 }
 
 function reducer(state: State, action: Action): State {
@@ -137,19 +92,6 @@ function reducer(state: State, action: Action): State {
           return { ...next, endedCount: next.endedCount + 1 };
         }
 
-        case 'transcript.delta':
-          return event.callId
-            ? applyTranscriptLine(state, event.callId, event.data.line)
-            : state;
-
-        case 'stream.status':
-          return event.callId
-            ? {
-                ...state,
-                sttStateByCall: { ...state.sttStateByCall, [event.callId]: event.data.state },
-              }
-            : state;
-
         case 'error':
           return { ...state, lastError: event.data.message };
 
@@ -170,8 +112,6 @@ function reducer(state: State, action: Action): State {
 
 export interface UseCallStream {
   connection: ConnectionStatus;
-  /** Transcription health for the selected call, or null if it is healthy. */
-  sttState: string | null;
   /** Increments when a call finishes; drives the history view's refetch. */
   endedCount: number;
   lastError: string | null;
@@ -263,7 +203,6 @@ export function useCallStream(): UseCallStream {
 
   return {
     connection: state.connection,
-    sttState: selectedCall ? (state.sttStateByCall[selectedCall.callId] ?? null) : null,
     endedCount: state.endedCount,
     lastError: state.lastError,
     activeCalls,

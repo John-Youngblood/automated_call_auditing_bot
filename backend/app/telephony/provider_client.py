@@ -50,7 +50,7 @@ class PlaceholderTelephonyClient:
     is_placeholder = True
 
     def __init__(self, settings: Settings) -> None:
-        self._provider = settings.telephony_provider
+        self._agent_number = settings.agent_forward_number
 
     async def hangup(self, call_id: str, *, reason: str = "") -> bool:
         """Terminate a live call.
@@ -63,10 +63,6 @@ class PlaceholderTelephonyClient:
             # from twilio.rest import Client
             # Client(account_sid, auth_token).calls(call_id).update(status="completed")
 
-        Vonage::
-
-            # PUT https://api.nexmo.com/v1/calls/{call_id}   {"action": "hangup"}
-
         Two things to handle when you make it real: the provider returns 404
         for a call that already ended (treat that as success -- the goal was
         "this call is not connected", and it is not), and the request is
@@ -74,10 +70,9 @@ class PlaceholderTelephonyClient:
         the failure rather than hanging the moderator's click.
         """
         logger.warning(
-            "[PLACEHOLDER] would hang up call_id=%s via %s REST API (reason=%r) "
+            "[PLACEHOLDER] would hang up call_id=%s via Twilio REST API (reason=%r) "
             "-- no carrier was contacted",
             call_id,
-            self._provider,
             reason or "unspecified",
         )
         return True
@@ -96,11 +91,10 @@ class PlaceholderTelephonyClient:
         runs; it deliberately does not overwrite an ACCEPTED status.
         """
         logger.warning(
-            "[PLACEHOLDER] would bridge call_id=%s to %s via %s REST API "
+            "[PLACEHOLDER] would bridge call_id=%s to %s via Twilio REST API "
             "-- no carrier was contacted",
             call_id,
             destination,
-            self._provider,
         )
         return True
 
@@ -115,20 +109,19 @@ class PlaceholderTelephonyClient:
             # )
         """
         logger.warning(
-            "[PLACEHOLDER] would decline call_id=%s via %s REST API (message=%r) "
+            "[PLACEHOLDER] would decline call_id=%s via Twilio REST API (message=%r) "
             "-- no carrier was contacted",
             call_id,
-            self._provider,
             message or "none",
         )
         return True
 
 
 def create_telephony_client(settings: Settings) -> TelephonyClient:
-    """Return the client for the configured provider.
+    """Return the REST client.
 
-    Only the placeholder exists today. When you add a real one, gate it on
-    credentials being present and fall back here, so a missing key degrades to
-    "logs instead of acting" rather than crashing at startup.
+    Only the placeholder exists today. When you add the real Twilio client,
+    gate it on credentials being present and fall back here, so a missing key
+    degrades to "logs instead of acting" rather than crashing at startup.
     """
     return PlaceholderTelephonyClient(settings)

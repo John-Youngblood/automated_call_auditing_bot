@@ -34,30 +34,21 @@ export interface Caller {
   country: string | null;
 }
 
-export interface TranscriptLine {
-  /**
-   * Identifies one utterance. Interim results reuse the id of the line they
-   * are refining, so a line with a known id replaces rather than appends --
-   * this is what makes text settle in place as the caller speaks.
-   */
-  segmentId: number;
-  text: string;
-  isFinal: boolean;
-  speaker: string | null;
-  confidence: number | null;
-  startTime: number | null;
-  receivedAt: string;
-}
-
 export interface Call {
   callId: string;
   status: CallStatus;
   caller: Caller;
   toNumber: string | null;
-  streamId: string | null;
   startedAt: string;
   endedAt: string | null;
-  transcript: TranscriptLine[];
+  /**
+   * What the caller said when asked why they are calling. Arrives complete in
+   * one update once they stop speaking, so there is no partial state to
+   * reconcile -- it is either null or the whole thing.
+   */
+  transcript: string | null;
+  /** Twilio's confidence in that transcription, 0-1. */
+  transcriptConfidence: number | null;
 }
 
 export type ServerEventType =
@@ -65,8 +56,6 @@ export type ServerEventType =
   | 'call.incoming'
   | 'call.updated'
   | 'call.ended'
-  | 'transcript.delta'
-  | 'stream.status'
   | 'pong'
   | 'error';
 
@@ -85,8 +74,6 @@ export type ServerEvent =
   | (BaseServerEvent & { type: 'call.incoming'; data: { call: Call } })
   | (BaseServerEvent & { type: 'call.updated'; data: { call: Call } })
   | (BaseServerEvent & { type: 'call.ended'; data: { call: Call } })
-  | (BaseServerEvent & { type: 'transcript.delta'; data: { line: TranscriptLine } })
-  | (BaseServerEvent & { type: 'stream.status'; data: { state: string; detail: string } })
   | (BaseServerEvent & { type: 'pong'; data: Record<string, never> })
   | (BaseServerEvent & { type: 'error'; data: { message: string } });
 
@@ -119,7 +106,6 @@ export interface CallHistoryEntry {
   endedAt: string | null;
   durationSeconds: number | null;
   transcriptSummary: string;
-  transcriptLineCount: number;
   /** Whether this caller is already on the blocklist. */
   isBlocked: boolean;
 }

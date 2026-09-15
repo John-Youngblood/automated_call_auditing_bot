@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from app.schemas.calls import Call, CamelModel, TranscriptLine
+from app.schemas.calls import Call, CamelModel
 
 
 class ServerEventType(StrEnum):
@@ -25,10 +25,6 @@ class ServerEventType(StrEnum):
     CALL_INCOMING = "call.incoming"
     CALL_UPDATED = "call.updated"
     CALL_ENDED = "call.ended"
-    #: A new or revised transcript line.
-    TRANSCRIPT = "transcript.delta"
-    #: Media-stream / STT health, surfaced so the UI can show a degraded state.
-    STREAM_STATUS = "stream.status"
     PONG = "pong"
     ERROR = "error"
 
@@ -71,22 +67,6 @@ class ServerEvent(CamelModel):
             type=type_,
             call_id=call.call_id,
             data={"call": call.model_dump(by_alias=True, mode="json")},
-        )
-
-    @classmethod
-    def transcript(cls, call_id: str, line: TranscriptLine) -> ServerEvent:
-        return cls(
-            type=ServerEventType.TRANSCRIPT,
-            call_id=call_id,
-            data={"line": line.model_dump(by_alias=True, mode="json")},
-        )
-
-    @classmethod
-    def stream_status(cls, call_id: str | None, state: str, detail: str = "") -> ServerEvent:
-        return cls(
-            type=ServerEventType.STREAM_STATUS,
-            call_id=call_id,
-            data={"state": state, "detail": detail},
         )
 
     @classmethod

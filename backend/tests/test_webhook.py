@@ -1,8 +1,7 @@
-"""The inbound-call webhook: what the provider gets back, and who gets queued."""
+"""The Twilio call flow: greet, listen, hold."""
 
 from __future__ import annotations
 
-import json
 from xml.etree.ElementTree import fromstring
 
 from fastapi.testclient import TestClient
@@ -20,28 +19,30 @@ TWILIO_FORM = {
 }
 
 
-def test_returns_twiml_that_plays_then_streams(client: TestClient) -> None:
+def test_greeting_is_the_prompt_and_twilio_listens_after_it(client: TestClient) -> None:
     response = client.post("/webhook/incoming-call", data=TWILIO_FORM)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/xml")
-
     root = fromstring(response.text)
-    assert root.tag == "Response"
-    # Order matters: <Connect> blocks until the stream ends, so the greeting
-    # has to be queued before it.
-    assert [child.tag for child in root] == ["Play", "Connect"]
 
-    assert root.findtext("Play") == "https://calls.example.test/static/greeting.mp3"
+    gather = root.find("Gather")
+    assert gather is not None
+    assert gather.attrib["input"] == "speech"
+    # This attribute is what makes the design turn-based: Twilio decides when
+    # the caller stopped, so nothing here has to stream or analyse audio.
+    assert gather.attrib["speechTimeout"] == "auto"
+    # A silent caller must still reach the dashboard rather than vanishing.
+    assert gather.attrib["actionOnEmptyResult"] == "true"
+    assert gather.attrib["action"] == "https://calls.example.test/webhook/speech-result"
 
-    stream = root.find("Connect/Stream")
-    assert stream is not None
-    # wss, not ws -- the public base URL is https.
-    assert stream.attrib["url"] == "wss://calls.example.test/ws/audio-stream"
+    # <Play> nested inside <Gather>: the greeting doubles as the prompt and a
+    # caller who talks over it is still heard.
+    assert gather.findtext("Play") == "https://calls.example.test/static/greeting.mp3"
 
-    params = {p.attrib["name"]: p.attrib["value"] for p in stream.findall("Parameter")}
-    assert params["callId"] == "CA0123456789"
-    assert params["from"] == "+15551230000"
+    # Fallback so a fallen-through <Gather> does not run off the end of the
+    # document and hang up on the caller.
+    assert root.findtext("Redirect") == "https://calls.example.test/webhook/speech-result"
 
 
 def test_call_enters_the_queue_with_caller_details(client: TestClient) -> None:
@@ -53,7 +54,7 @@ def test_call_enters_the_queue_with_caller_details(client: TestClient) -> None:
     assert calls[0]["status"] == "ringing"
     assert calls[0]["caller"]["number"] == "+15551230000"
     assert calls[0]["caller"]["city"] == "Portland"
-    assert calls[0]["toNumber"] == "+15559990000"
+    assert calls[0]["transcript"] is None
 
 
 def test_retried_webhook_does_not_duplicate_the_call(client: TestClient) -> None:
@@ -63,22 +64,70 @@ def test_retried_webhook_does_not_duplicate_the_call(client: TestClient) -> None
     assert len(client.get("/api/calls").json()) == 1
 
 
-def test_vonage_provider_answers_with_json_ncco(make_client) -> None:
-    with make_client(TELEPHONY_PROVIDER="vonage") as client:
-        response = client.post(
-            "/webhook/incoming-call",
-            json={"uuid": "vg-abc123", "from": "15551230000", "to": "15559990000"},
+class TestSpeechResult:
+    def speak(self, client: TestClient, text: str, confidence: str = "0.94"):
+        return client.post(
+            "/webhook/speech-result",
+            data={"CallSid": "CA0123456789", "SpeechResult": text, "Confidence": confidence},
         )
 
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/json")
+    def test_transcript_lands_on_the_call_and_the_caller_is_held(self, client: TestClient) -> None:
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
 
-    ncco = json.loads(response.text)
-    assert [action["action"] for action in ncco] == ["stream", "connect"]
-    endpoint = ncco[1]["endpoint"][0]
-    assert endpoint["type"] == "websocket"
-    assert endpoint["uri"] == "wss://calls.example.test/ws/audio-stream"
-    assert endpoint["headers"]["callId"] == "vg-abc123"
+        response = self.speak(client, "I need to reschedule my appointment.")
+
+        assert response.status_code == 200
+        # <Enqueue> holds the call open with Twilio's own hold music -- no
+        # queue to pre-create, no hold audio to host, no redirect loop.
+        assert fromstring(response.text).findtext("Enqueue") == "screening"
+
+        call = client.get("/api/calls/CA0123456789").json()
+        assert call["transcript"] == "I need to reschedule my appointment."
+        assert call["transcriptConfidence"] == 0.94
+        # Now awaiting a human, rather than still talking.
+        assert call["status"] == "screening"
+
+    def test_silent_caller_still_reaches_the_dashboard(self, client: TestClient) -> None:
+        """actionOnEmptyResult fires with no SpeechResult. The call must still
+        be actionable rather than sitting in limbo."""
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+
+        response = self.speak(client, "")
+
+        assert response.status_code == 200
+        call = client.get("/api/calls/CA0123456789").json()
+        assert call["transcript"] is None
+        assert call["status"] == "screening"
+
+    def test_missing_confidence_is_tolerated(self, client: TestClient) -> None:
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+
+        response = client.post(
+            "/webhook/speech-result",
+            data={"CallSid": "CA0123456789", "SpeechResult": "hello"},
+        )
+
+        assert response.status_code == 200
+        assert client.get("/api/calls/CA0123456789").json()["transcriptConfidence"] is None
+
+    def test_transcript_reaches_dashboards(self, client: TestClient) -> None:
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+
+        with client.websocket_connect("/ws/frontend") as ws:
+            ws.receive_json()  # snapshot
+            self.speak(client, "I'm calling about an invoice.")
+            event = ws.receive_json()
+
+        # The transcript rides along on the call object, so it needs no event
+        # type of its own.
+        assert event["type"] == "call.updated"
+        assert event["data"]["call"]["transcript"] == "I'm calling about an invoice."
+
+    def test_speech_for_an_unknown_call_does_not_error(self, client: TestClient) -> None:
+        """Twilio retries; a result can outlive the call it belongs to."""
+        response = self.speak(client, "hello")
+
+        assert response.status_code == 200
 
 
 class TestSignatureValidation:
@@ -109,6 +158,17 @@ class TestSignatureValidation:
                 "/webhook/incoming-call",
                 data={**TWILIO_FORM, "From": "+15550009999"},
                 headers={"X-Twilio-Signature": signature},
+            )
+
+        assert response.status_code == 403
+
+    def test_speech_result_is_also_verified(self, make_client) -> None:
+        """The transcript endpoint is just as public as the first one -- an
+        unsigned post here could inject words the caller never said."""
+        with make_client(VALIDATE_WEBHOOK_SIGNATURE="true", TWILIO_AUTH_TOKEN=self.TOKEN) as client:
+            response = client.post(
+                "/webhook/speech-result",
+                data={"CallSid": "CA1", "SpeechResult": "let me in"},
             )
 
         assert response.status_code == 403

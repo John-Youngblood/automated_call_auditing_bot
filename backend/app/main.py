@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import audio_stream, calls, frontend, health, moderation, webhooks
+from app.api.routes import calls, frontend, health, moderation, webhooks
 from app.config import Settings, get_settings
 from app.db.session import Database
 from app.services.blocklist import BlocklistService
@@ -37,7 +37,6 @@ def configure_logging(level: str) -> None:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    # Per-frame access logs would be one line per 20ms of audio.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
@@ -64,17 +63,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     broadcaster = Broadcaster(queue_max=settings.frontend_queue_max)
     app.state.broadcaster = broadcaster
-    app.state.registry = CallRegistry(
-        broadcaster=broadcaster,
-        transcript_history_max=settings.transcript_history_max,
-        history=history,
-    )
+    app.state.registry = CallRegistry(broadcaster=broadcaster, history=history)
 
     log.info(
-        "call screener up env=%s provider=%s stt=%s blocked=%s public=%s",
+        "call screener up env=%s blocked=%s public=%s",
         settings.app_env,
-        settings.telephony_provider,
-        "deepgram" if settings.stt_enabled else "mock",
         blocklist.size,
         settings.public_base_url,
     )
@@ -123,7 +116,6 @@ def create_app() -> FastAPI:
     app.include_router(webhooks.router)
     app.include_router(calls.router)
     app.include_router(moderation.router)
-    app.include_router(audio_stream.router)
     app.include_router(frontend.router)
 
     # Serves the greeting MP3 when GREETING_AUDIO_URL is unset. Fine for local

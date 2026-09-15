@@ -1,6 +1,6 @@
 # Architecture notes
 
-Companion to the README: the reasoning behind the structure, and what to change
+Companion to the README: why the structure is what it is, and what to change
 when the assumptions stop holding.
 
 ## Dependency direction
@@ -13,47 +13,72 @@ routes  ──▶  services  ──▶  schemas
 
 Routes depend on services; services never import routes. `main.py` is the only
 place that knows about both — it builds the singletons and attaches them to
-`app.state`, and `api/deps.py` is the only way routes reach them. That is what
-lets a test build a fresh app per test with isolated state, which is why the
-suite has no cross-test leakage and needs no cleanup fixtures.
+`app.state`, and `api/deps.py` is the only way routes reach them. That's what
+lets each test build a fresh app with isolated state, which is why the suite
+needs no cleanup fixtures.
 
-`telephony/` is the containment boundary for provider quirks: payload shapes,
-XML vs JSON dialects, frame framing, signature schemes. Supporting a new
-provider means adding a module there, not editing routes or services.
+`telephony/` is the containment boundary for Twilio: TwiML documents, signature
+verification, REST control. Everything outside it deals only in
+`app.schemas` types.
+
+### On being Twilio-only
+
+An earlier version had a provider abstraction with a Vonage renderer beside the
+TwiML one. Only the response dialect was ever implemented — frame parsing,
+signature verification and outbound audio all assumed Twilio — so
+"multi-provider" was true of one file out of four and false everywhere it
+mattered, and the structure let that claim pass unnoticed.
+
+It's now honestly Twilio-only. The current design leans on `<Gather
+input="speech">` and `speechTimeout="auto"`, which have no direct equivalent
+elsewhere, so a second provider is a real port rather than a config change.
+If you do it, put signature verification and the TwiML/NCCO choice behind one
+adapter object you cannot partially implement, so a half-supported provider
+fails at startup instead of silently at 3am.
+
+## Why there is no audio anywhere
+
+The obvious design for live transcription is Twilio Media Streams: a websocket
+delivering 20ms audio frames, forwarded to a streaming STT API. That's what
+this repo did first (see commit `a124230`) and it needed frame parsing, a
+bounded audio queue, backpressure handling, a keepalive loop, interim-vs-final
+transcript reconciliation, and a mock STT mode to develop against.
+
+All of it existed to answer one question: *has the caller stopped talking?*
+
+`speechTimeout="auto"` answers that question inside Twilio, for free. The
+transcript then arrives complete in a single webhook — no partial state, no
+ordering to get right, no audio to buffer. Roughly 1,000 lines and two
+dependencies deleted, for a system that does the same job.
+
+The tradeoff is real and worth knowing: the operator sees nothing until the
+caller finishes. If you ever need words appearing as they're spoken — to let an
+operator cut in at second 4 of a 30-second ramble — that is the one thing this
+design cannot do, and the streaming version is in git history.
 
 ## Concurrency model
 
-One asyncio event loop. Per call there are three tasks:
-
-| Task | Lives in | Blocking rule |
-| --- | --- | --- |
-| media receive loop | `routes/audio_stream.py` | Never awaits anything slower than the socket |
-| STT pump | `services/screening.py` | Owns the only `await` to Deepgram |
-| Deepgram reader | `services/deepgram.py` | Publishes transcripts, never back to the pump |
-
-Plus two per dashboard (a reader and a writer, raced with
+One asyncio event loop, and nothing on a hot path anymore. Webhooks are
+short-lived request handlers; the only long-lived connections are the dashboard
+websockets, which run two tasks each (a reader and a writer, raced with
 `asyncio.wait(FIRST_COMPLETED)` so a vanished client is noticed immediately
 rather than at the next send).
 
-Two bounded queues decouple the stages, and **both drop oldest on overflow**:
-
-- `screening.AUDIO_QUEUE_MAX` (100 frames ≈ 2s) — between the socket and STT.
-- `broadcaster` queue (`FRONTEND_QUEUE_MAX`, default 250) — per dashboard.
-
-Dropping the oldest is the right policy for both. This is live audio: a
-five-second-old frame has no value, and a dashboard that is behind should jump
-to the present rather than crawl through history.
+The one piece of back-pressure machinery left is the broadcaster's per-client
+bounded queue, which **drops oldest on overflow**. A dashboard that is behind
+should jump to the present, not crawl through history.
 
 ## Failure behaviour
 
 | Failure | Result |
 | --- | --- |
-| Deepgram unreachable at call start | Call proceeds untranscribed; `stream.status: degraded` reaches the dashboard |
-| Deepgram drops mid-call | Session marks itself degraded; `send_audio` becomes a no-op; call continues |
-| Malformed provider frame | Logged and skipped; one bad frame out of ~50/sec never ends a call |
+| Caller says nothing | `actionOnEmptyResult` fires the webhook anyway; the call reaches the dashboard with an empty transcript rather than vanishing |
+| `<Gather>` falls through | Trailing `<Redirect>` sends the call to the same endpoint instead of off the end of the document, which would hang up on the caller |
+| Speech result for an unknown call | Logged and dropped; Twilio retries can outlive a call |
+| Caller hangs up while on hold | Status callback ends the call and clears the queue card |
+| Twilio retries the webhook | `register_incoming` is idempotent; no duplicate queue rows |
 | Dashboard disconnects | Subscriber removed by the `subscribe()` context manager, even mid-send |
-| Media stream closes | `finally` flushes STT and ends the call — teardown runs on every exit path |
-| Provider retries the webhook | `register_incoming` is idempotent; no duplicate queue rows |
+| Low transcription confidence | Surfaced in the UI rather than hidden — the operator is making a decision from that text |
 
 ## Moderation data flow
 
@@ -62,96 +87,74 @@ to the present rather than crawl through history.
                             │
                  blocked ───┼─── not blocked
                             │            │
-                   <Reject> │            ▼
-                   history  │       queue + media stream + STT
+                  <Reject>  │            ▼
+                  history   │      <Gather> → transcript → queue
                             ▼
-                      (no stream, no STT, no billing)
+                  (never answered, never billed)
 ```
 
-The blocklist is read on the webhook path while the provider holds the caller
-waiting, so it is a cached set rather than a query. The cache is loaded once at
-startup and updated on every write, so it cannot drift *within* a process — the
-same single-worker constraint the broadcaster and registry already impose.
+The blocklist is read while Twilio holds the caller waiting, so it's a cached
+set rather than a query. Loaded once at startup and updated on every write, so
+it cannot drift *within* a process — the same single-worker constraint the
+broadcaster and registry impose.
 
 `call_history` is written on terminal transitions only, which is why
 `CallRegistry.set_status` and `.end` are async while the rest of the class is
-sync: they fire once per call, well off the audio hot path.
+sync: they fire once per call.
 
 ### Two failure modes worth knowing
 
-**Normalisation is the whole feature.** A blocklist that stores what the
-moderator typed and compares it against what the carrier sends will silently
-never match. Everything goes through `services/phone.py` on the way in and on
-the way to a comparison. If you need real carrier-grade parsing (extensions,
-short codes, arbitrary national formats), swap that module's body for
-`phonenumbers`; nothing else depends on how it works.
+**Normalisation is the whole blocklist feature.** A blocklist that stores what
+the moderator typed and compares it against what the carrier sends will
+silently never match. Everything goes through `services/phone.py` on the way in
+and on the way to a comparison. If you need real carrier-grade parsing
+(extensions, short codes, arbitrary national formats), swap that module's body
+for `phonenumbers`; nothing else depends on how it works.
 
 **SQLite has no timezone-aware datetime type.** `DateTime(timezone=True)` is a
 no-op there: aware values go in, naive ones come back, Pydantic serialises them
-with no offset, and the browser reads them as local time — shifting every
-entry in the moderation log by the UTC offset. The `UtcDateTime` type decorator
-in `db/models.py` normalises both directions; use it for any datetime column
-you add.
+with no offset, and the browser reads them as local time — shifting every entry
+in the moderation log by the UTC offset. The `UtcDateTime` type decorator in
+`db/models.py` normalises both directions; use it for any datetime column you
+add.
 
 ## Scaling out
 
-The current limit is deliberate: `CallRegistry` and `Broadcaster` are
-in-process, so the deployment runs a single uvicorn worker. One process handles
-a lot of concurrent calls — the work per call is I/O, not CPU — but it is a
-single point of failure and it caps you at one machine.
-
-When you outgrow it, in order:
+Deliberately one uvicorn worker: `CallRegistry`, `Broadcaster` and the
+blocklist cache are all in-process. When you outgrow it, in order:
 
 1. **Move the fan-out to Redis pub/sub.** Keep `Broadcaster`'s interface; have
    `publish` write to a channel and each process subscribe and forward into its
-   local queues. The bounded-queue policy stays exactly as it is. Publish
-   block events on the same channel so the blocklist caches stay in step —
-   otherwise a number blocked on worker A keeps getting through on worker B.
-2. **Move call state to Redis or Postgres.** `CallRegistry` is already the only
-   writer, so this is one class to reimplement. Finished calls are already
-   durable in `call_history`; it is the *in-flight* calls that are
-   process-local. Swap SQLite for Postgres at the same time — the models are
-   plain SQLAlchemy, but `create_all` is not a migration story, so add Alembic
-   before the history table holds anything you would miss.
-3. **Route media streams by call id.** Audio websockets are sticky to the
-   process holding the call's STT connection; a consistent hash on `callId` at
-   the load balancer is the usual answer.
+   local queues. Publish block events on the same channel so the blocklist
+   caches stay in step — otherwise a number blocked on worker A keeps getting
+   through on worker B.
+2. **Move in-flight call state to Redis or Postgres.** `CallRegistry` is
+   already the only writer, so it's one class to reimplement. Finished calls
+   are already durable. Swap SQLite for Postgres at the same time — the models
+   are plain SQLAlchemy, but `create_all` is not a migration story, so add
+   Alembic before `call_history` holds anything you'd miss.
 
-Note that steps 1 and 2 also unlock horizontal restarts without dropping
-in-flight calls, which matters more than raw throughput for most deployments.
-
-## The interim/final transcript contract
-
-Deepgram emits interim hypotheses before committing. The registry keeps one
-`segment_id` open per utterance: interim results reuse it, a final result closes
-it, and the next interim starts a new one. The dashboard replaces a line whose
-`segmentId` it already has, and appends otherwise.
-
-This is the thing to preserve if you swap STT providers — get it wrong in one
-direction and text duplicates on screen, wrong in the other and it overwrites
-finished sentences.
+Note there is no sticky-routing requirement anymore. With no per-call
+websocket to the provider, any worker can serve any webhook — which makes
+horizontal scaling substantially easier than it was in the streaming design.
 
 ## Security posture
 
 Currently suitable for a trusted network, not the public internet:
 
 - The dashboard has no authentication and the API has no authorisation. Anyone
-  who can reach `/ws/frontend` hears every caller's transcript.
-- Webhook signature validation exists but is off by default
-  (`VALIDATE_WEBHOOK_SIGNATURE`). Turn it on before pointing a real number at
-  this.
-- `/ws/audio-stream` cannot be authenticated — providers send no credentials.
-  Identify the call from the `callId` parameter planted in your own webhook
-  response, and restrict ingress to the provider's published IP ranges.
-- Call audio and transcripts are personal data, and in a healthcare context very
-  likely PHI. Nothing here is encrypted at rest, retained deliberately, or
-  deleted on a schedule — decide those before this handles a real call. The
-  `call_history` table makes this sharper, not looser: transcripts now persist
-  past process restart, so retention is a decision you are already making by
-  default.
-- **Anyone who can reach the API can block any number.** There is no
-  authentication, so `blockedBy` is self-reported and worthless for audit, and
-  nothing stops a bad actor from blocking your most important callers. Put auth
-  in front of `/api/block-number` before this is reachable by anyone untrusted.
-- There is no unblock path. That is deliberate for now (the confirmation copy
-  says as much), but it means a mistaken block needs a database edit.
+  who can reach `/ws/frontend` hears every caller's business.
+- **Anyone who can reach the API can block any number.** `blockedBy` is
+  self-reported and worthless for audit, and nothing stops someone blocking
+  your most important callers. Put auth in front of `/api/block-number` before
+  this is reachable by anyone untrusted.
+- Webhook signature validation exists but is off by default. Turn it on before
+  pointing a real number at this — note it covers *both* webhooks, because an
+  unsigned post to `/webhook/speech-result` could put words in a caller's
+  mouth.
+- Transcripts are personal data, and in a healthcare context likely PHI.
+  `call_history` persists them past restart, so retention is a decision you are
+  already making by default. Nothing here is encrypted at rest or deleted on a
+  schedule.
+- There is no unblock path. Deliberate for now (the confirmation copy says as
+  much), but a mistaken block needs a database edit.

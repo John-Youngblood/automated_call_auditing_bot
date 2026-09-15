@@ -1,36 +1,10 @@
-"""Telecom-provider adapters.
+"""Twilio-specific code.
 
-Everything provider-specific lives here -- webhook payload shapes, response
-dialects (TwiML XML vs NCCO JSON), media-stream framing, signature schemes.
-The rest of the app deals only in :mod:`app.schemas` types, so swapping
-provider means adding a module here, not editing routes or services.
+The containment boundary: TwiML documents, webhook signature verification, and
+the REST client for controlling a live call. Everything outside this package
+deals only in :mod:`app.schemas` types.
 """
 
-from app.telephony.base import CallPlan, InstructionRenderer, RenderedResponse
-from app.telephony.ncco import NccoRenderer
-from app.telephony.twiml import TwimlRenderer
+from app.telephony.twiml import RenderedResponse, answer_and_gather, hold, reject
 
-_RENDERERS: dict[str, InstructionRenderer] = {
-    "twilio": TwimlRenderer(),
-    "vonage": NccoRenderer(),
-}
-
-
-def get_renderer(provider: str) -> InstructionRenderer:
-    """Return the response renderer for a configured provider name."""
-    try:
-        return _RENDERERS[provider]
-    except KeyError:
-        raise ValueError(
-            f"unsupported TELEPHONY_PROVIDER {provider!r}; known: {sorted(_RENDERERS)}"
-        ) from None
-
-
-__all__ = [
-    "CallPlan",
-    "InstructionRenderer",
-    "NccoRenderer",
-    "RenderedResponse",
-    "TwimlRenderer",
-    "get_renderer",
-]
+__all__ = ["RenderedResponse", "answer_and_gather", "hold", "reject"]

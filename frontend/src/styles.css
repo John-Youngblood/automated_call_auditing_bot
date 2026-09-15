@@ -317,91 +317,60 @@ h2 {
 
 /* ------------------------------------------------------------ transcript -- */
 .transcript {
-  position: relative;
   flex: 1;
   min-height: 0;
-}
-
-.transcript__scroll {
-  height: 100%;
-  padding: 16px 18px;
+  padding: 18px;
   overflow-y: auto;
-  scroll-behavior: smooth;
 }
 
-.transcript__scroll:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.transcript__empty {
+.transcript__quote {
   margin: 0;
-  font-size: 13.5px;
+  padding: 0 0 0 14px;
+  font-size: 16px;
+  line-height: 1.65;
+  border-left: 3px solid var(--accent);
+}
+
+.transcript__pending,
+.transcript__empty {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  font-size: 14px;
   color: var(--text-muted);
 }
 
-.transcript__line {
-  margin: 0 0 10px;
-  font-size: 15.5px;
-  line-height: 1.6;
-}
-
-/* Interim results are dimmed: they are hypotheses and may still change. */
-.transcript__line--interim {
-  color: var(--text-muted);
-}
-
-.transcript__speaker {
-  display: inline-block;
-  margin-right: 8px;
-  padding: 1px 6px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 4px;
-  vertical-align: 1px;
-}
-
-.transcript__cursor {
-  display: inline-block;
+/* Three dots pulsing while the caller is still talking. The only motion left
+   in the transcript pane -- it is the one thing that is genuinely in progress. */
+.transcript__dots {
   width: 7px;
-  height: 1.05em;
-  margin-left: 3px;
+  height: 7px;
+  border-radius: 50%;
   background: var(--accent);
-  vertical-align: -2px;
-  animation: blink 1.1s step-end infinite;
+  box-shadow: 12px 0 0 var(--accent), 24px 0 0 var(--accent);
+  margin-right: 24px;
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .transcript__cursor {
+  .transcript__dots {
     animation: none;
-  }
-
-  .transcript__scroll {
-    scroll-behavior: auto;
   }
 }
 
-.transcript__jump {
-  position: absolute;
-  right: 18px;
-  bottom: 14px;
-  padding: 7px 13px;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--surface);
-  background: var(--text);
-  border: none;
-  border-radius: 999px;
-  box-shadow: var(--shadow);
-  cursor: pointer;
+.transcript__warning {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: 6px;
 }
 
 /* --------------------------------------------------------------- actions -- */
@@ -742,17 +711,11 @@ h2 {
   color: var(--text-muted);
 }
 
-.history__lines,
 .history__no-transcript {
   display: block;
-  margin-top: 4px;
   font-size: 12px;
-  color: var(--text-muted);
-}
-
-.history__no-transcript {
-  margin-top: 0;
   font-style: italic;
+  color: var(--text-muted);
   opacity: 0.75;
 }
 

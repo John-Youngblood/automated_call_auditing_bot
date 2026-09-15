@@ -24,9 +24,11 @@ class CamelModel(BaseModel):
 
 
 class CallStatus(StrEnum):
-    #: Webhook received, greeting playing, waiting on a human decision.
+    #: Greeting is playing and the caller is describing why they are calling.
+    #: Nothing is on the dashboard to act on yet.
     RINGING = "ringing"
-    #: Audio is flowing and being transcribed.
+    #: The caller has finished and their transcript is on the dashboard. They
+    #: are on hold, waiting for an operator to decide.
     SCREENING = "screening"
     ACCEPTED = "accepted"
     #: A human declined the call.
@@ -54,24 +56,6 @@ TERMINAL_STATUSES = frozenset(
 )
 
 
-class TranscriptLine(CamelModel):
-    """One chunk of recognised speech.
-
-    Deepgram emits interim hypotheses before it commits, so a line starts with
-    ``is_final=False`` and is replaced in place until the final arrives. The
-    dashboard keys on ``segment_id`` to do that replacement.
-    """
-
-    segment_id: int
-    text: str
-    is_final: bool = False
-    speaker: str | None = None
-    confidence: float | None = None
-    #: Seconds from the start of the media stream.
-    start_time: float | None = None
-    received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
 class Caller(CamelModel):
     number: str | None = None
     name: str | None = None
@@ -86,11 +70,17 @@ class Call(CamelModel):
     status: CallStatus = CallStatus.RINGING
     caller: Caller = Field(default_factory=Caller)
     to_number: str | None = None
-    #: Provider's media-stream identifier, present once streaming begins.
-    stream_id: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     ended_at: datetime | None = None
-    transcript: list[TranscriptLine] = Field(default_factory=list)
+
+    #: What the caller said when asked why they are calling. Populated in one
+    #: shot by the speech-result webhook once they stop speaking, so there is
+    #: no partial state to reconcile -- it is either absent or complete.
+    transcript: str | None = None
+    #: Provider's confidence in that transcription, 0-1. Worth surfacing: a
+    #: low score means the operator should not trust the text they are about
+    #: to make a decision from.
+    transcript_confidence: float | None = None
 
     @property
     def is_open(self) -> bool:
