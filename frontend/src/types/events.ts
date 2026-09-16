@@ -31,8 +31,12 @@ export interface Caller {
   number: string | null;
   /** Saved contact name if there is one, else the carrier's caller ID. */
   name: string | null;
-  city: string | null;
-  country: string | null;
+  /**
+   * Where the *number* is registered, e.g. "Portland, OR" — already formatted
+   * by the backend, so the state-vs-country rule exists in one language only.
+   * Not the caller's actual location: a ported mobile keeps its old area code.
+   */
+  location: string | null;
   isFavorite: boolean;
 }
 

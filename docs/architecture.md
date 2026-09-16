@@ -102,6 +102,21 @@ broadcaster and registry impose.
 `CallRegistry.set_status` and `.end` are async while the rest of the class is
 sync: they fire once per call.
 
+### Caller "location" is not a location
+
+The label beside a caller ("Portland, OR") comes from Twilio's
+`FromCity`/`FromState`/`FromCountry`, which it derives from the *number's*
+rate centre. It describes where the number was issued, not where the person
+is: a ported mobile keeps its original area code forever, and a VoIP number
+can be registered anywhere. Treat it as a weak hint, never as fact, and do not
+build routing or policy on it.
+
+`format_location` picks the second component by country — state for NANP
+(`Portland, OR`, since "US" tells a US operator nothing), country otherwise
+(`London, GB`). It runs once in the webhook and the result is stored, so the
+rule exists in Python only; the dashboard renders `caller.location` verbatim
+rather than reimplementing it in TypeScript.
+
 ### Two failure modes worth knowing
 
 **Normalisation is the whole blocklist feature.** A blocklist that stores what

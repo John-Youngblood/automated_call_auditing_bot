@@ -48,6 +48,7 @@ No credentials needed to try it. Place some fake calls:
 
 ```bash
 make simulate CALLS=3
+make simulate SAY="I need to reschedule my appointment"   # pick the words
 ```
 
 Each appears in the queue with its transcript, and Accept / Reject / Block

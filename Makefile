@@ -41,9 +41,11 @@ fmt: ## Auto-format the backend
 
 check: lint test ## Lint + test, what CI should run
 
-simulate: ## Place fake calls against a running backend (CALLS=3 SECONDS=20)
+# SECONDS is deliberately absent: call duration mattered when audio was
+# streamed, but Twilio now decides when the caller stops talking.
+simulate: ## Place fake calls against a running backend (CALLS=3 SAY="...")
 	$(PY) $(BACKEND)/scripts/simulate_call.py \
-		--calls $(or $(CALLS),1) --seconds $(or $(SECONDS),12)
+		--calls $(or $(CALLS),1) $(if $(SAY),--say "$(SAY)",)
 
 greeting: ## Regenerate the placeholder greeting MP3
 	$(PY) $(BACKEND)/scripts/make_placeholder_greeting.py

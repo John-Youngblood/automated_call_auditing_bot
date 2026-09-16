@@ -38,6 +38,7 @@ from fastapi.responses import Response
 
 from app.api.deps import BlocklistDep, ContactsDep, HistoryDep, RegistryDep, SettingsDep
 from app.schemas.calls import Call, Caller, CallStatus
+from app.services.phone import format_location
 from app.telephony import answer_and_gather, hold, reject
 from app.telephony.signature import verify_twilio_signature
 
@@ -112,8 +113,13 @@ async def incoming_call(
         # A saved contact name beats the carrier's caller ID, which is often
         # stale or generic ("WIRELESS CALLER").
         name=contacts.resolve_name(number, params.get("CallerName") or None),
-        city=params.get("FromCity") or None,
-        country=params.get("FromCountry") or None,
+        # Twilio derives these from the number's rate centre, not from where
+        # the caller is -- see format_location.
+        location=format_location(
+            params.get("FromCity"),
+            params.get("FromState"),
+            params.get("FromCountry"),
+        ),
         is_favorite=contacts.is_favorite(number),
     )
 

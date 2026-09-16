@@ -14,6 +14,7 @@ TWILIO_FORM = {
     "To": "+15559990000",
     "CallerName": "Northgate Medical",
     "FromCity": "Portland",
+    "FromState": "OR",
     "FromCountry": "US",
     "CallStatus": "ringing",
 }
@@ -53,7 +54,8 @@ def test_call_enters_the_queue_with_caller_details(client: TestClient) -> None:
     assert calls[0]["callId"] == "CA0123456789"
     assert calls[0]["status"] == "ringing"
     assert calls[0]["caller"]["number"] == "+15551230000"
-    assert calls[0]["caller"]["city"] == "Portland"
+    # State, not country: "Portland, US" tells a US operator nothing.
+    assert calls[0]["caller"]["location"] == "Portland, OR"
     assert calls[0]["transcript"] is None
 
 

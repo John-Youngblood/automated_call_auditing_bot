@@ -46,8 +46,6 @@ class CallHistoryRepository:
         if call.ended_at is not None:
             duration = max(0, int((call.ended_at - call.started_at).total_seconds()))
 
-        location = ", ".join(filter(None, (call.caller.city, call.caller.country))) or None
-
         async with self._db.session() as session:
             row = await session.get(CallHistory, call.call_id)
             if row is None:
@@ -58,7 +56,7 @@ class CallHistoryRepository:
             # and used to populate a Block action directly.
             row.from_number = try_normalize(call.caller.number)
             row.from_name = call.caller.name
-            row.from_location = location
+            row.from_location = call.caller.location
             row.to_number = call.to_number
             row.status = str(call.status)
             row.started_at = call.started_at

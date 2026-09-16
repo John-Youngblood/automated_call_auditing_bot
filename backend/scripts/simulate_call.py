@@ -48,6 +48,7 @@ async def place_call(client: httpx.AsyncClient, base: str, reason: str, delay: f
             "To": "+15039990000",
             "CallerName": "Simulated Caller",
             "FromCity": "Portland",
+            "FromState": "OR",
             "FromCountry": "US",
             "CallStatus": "ringing",
         },

@@ -20,9 +20,6 @@ export function formatElapsed(startedAtIso: string, nowMs: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-export function describeLocation(city: string | null, country: string | null): string | null {
-  return [city, country].filter(Boolean).join(', ') || null;
-}
 
 /** Whole seconds as m:ss, for a duration the backend already computed. */
 export function formatDuration(seconds: number): string {

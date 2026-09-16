@@ -5,7 +5,7 @@ import { useContacts } from '../hooks/useContacts';
 import { useCallHistory } from '../hooks/useCallHistory';
 import { useCallStream } from '../hooks/useCallStream';
 import { useNow } from '../hooks/useNow';
-import { describeLocation, formatClock, formatElapsed, formatPhoneNumber } from '../lib/format';
+import { formatClock, formatElapsed, formatPhoneNumber } from '../lib/format';
 import type { Call, CallHistoryEntry } from '../types/events';
 import CallActions from './CallActions';
 import CallHistoryView from './CallHistoryView';
@@ -219,7 +219,7 @@ export default function Dashboard() {
                         selectedCall.caller.name
                           ? formatPhoneNumber(selectedCall.caller.number)
                           : null,
-                        describeLocation(selectedCall.caller.city, selectedCall.caller.country),
+                        selectedCall.caller.location,
                         `started ${formatClock(selectedCall.startedAt)}`,
                       ]
                         .filter(Boolean)

@@ -60,8 +60,10 @@ class Caller(CamelModel):
     number: str | None = None
     #: Saved contact name if there is one, else the carrier's caller ID.
     name: str | None = None
-    city: str | None = None
-    country: str | None = None
+    #: Short label for where the *number* is registered, e.g. "Portland, OR".
+    #: Formatted server-side by app.services.phone.format_location so the rule
+    #: for picking state vs country lives in one language, not two.
+    location: str | None = None
     #: Resolved from the contacts table when the call arrives, so the dashboard
     #: can render a star without a second lookup per row.
     is_favorite: bool = False
