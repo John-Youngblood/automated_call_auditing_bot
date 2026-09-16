@@ -59,8 +59,9 @@ TERMINAL_STATUSES = frozenset(
 
 class Caller(CamelModel):
     number: str | None = None
-    #: The carrier's caller-ID name, when it sends one. Often absent, and
-    #: often stale or generic ("WIRELESS CALLER") when present.
+    #: The carrier's caller-ID name. Only present when Caller ID Lookup is
+    #: enabled on the Twilio number (a paid per-lookup feature, off by
+    #: default), and even then often generic ("WIRELESS CALLER").
     name: str | None = None
     #: Short label for where the *number* is registered, e.g. "Portland, OR".
     #: Formatted server-side by app.services.phone.format_location so the rule

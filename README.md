@@ -62,16 +62,23 @@ resolve them.
 |---|---|---|---|
 | 1 | `POST /webhook/incoming-call` | `<Gather input="speech">` with the greeting nested inside | the greeting, then silence while Twilio listens |
 | 2 | `POST /webhook/speech-result` | `<Enqueue>` | hold music |
-| 3 | `POST /webhook/call-status` | — | (call is over) |
+| 3 | `POST /webhook/queue-exit` | empty `<Response/>` | (they left the queue) |
+| 4 | `POST /webhook/call-status` | `204` | (call is over) |
 
-Three details that matter:
+Four details that matter:
 
-- **`speechTimeout="auto"`** is what makes this turn-based. Twilio decides when
-  the caller stopped and only then posts the transcript.
+- **`speechTimeout` is a number, never `"auto"`.** It's what makes this
+  turn-based — Twilio decides when the caller stopped and only then posts the
+  transcript. Not `auto` for two reasons: Twilio warns (error 13335) when
+  `auto` is combined with a `speechModel`, and `auto` stops at the *first*
+  pause, truncating anyone mid-explanation.
 - **`<Play>` sits inside `<Gather>`**, so the greeting doubles as the prompt and
   a caller who talks over it is still heard.
 - **`<Enqueue>`** holds the call open with Twilio's built-in hold music — no
   queue to pre-create, no hold audio to host, no redirect loop to maintain.
+- **`<Enqueue action>` is how abandonment is detected.** Nothing keeps a
+  connection to this service while a caller holds, so without it a caller who
+  gives up leaves no trace. Twilio posts `QueueResult=hangup` and `QueueTime`.
 
 A blocked caller never gets past step 1: they're refused with `<Reject>`, which
 drops the call before it's answered, so there's no answered leg and no
@@ -158,12 +165,19 @@ someone needs blocking the call is usually already over.
    ```
 2. Set `PUBLIC_BASE_URL` to that origin. It builds the greeting URL and the
    `action` URL on `<Gather>`, so `localhost` will not work.
-3. Point your number's voice webhook at `/webhook/incoming-call` and its status
-   callback at `/webhook/call-status`.
-4. Set `TWILIO_AUTH_TOKEN` and `VALIDATE_WEBHOOK_SIGNATURE=true`. Both webhooks
+3. Point your number's voice webhook at `/webhook/incoming-call`.
+4. Point the number's **status callback** at `/webhook/call-status`. This one
+   is easy to skip and costly to skip: nothing else tells this service that a
+   caller hung up while on hold, so without it their card sits in the queue
+   until someone tries to put a dead line on air.
+5. Set `TWILIO_AUTH_TOKEN` and `VALIDATE_WEBHOOK_SIGNATURE=true`. Both webhooks
    are public URLs; unsigned, anyone who finds them can fabricate a call or
    inject words the caller never said.
-5. Replace the silent placeholder greeting
+6. Optionally enable **Caller ID Lookup** (`VoiceCallerIdLookup`) on the
+   number if you want caller names. It is off by default and billed per
+   lookup; without it `CallerName` is never sent and every caller shows as a
+   bare number.
+7. Replace the silent placeholder greeting
    (`backend/app/static/greeting.mp3`) with a real recording that asks the
    caller to state their reason, or set `GREETING_AUDIO_URL`.
 
@@ -215,6 +229,6 @@ See [docs/architecture.md](docs/architecture.md) for the scale-out path.
 | Accept / Reject / Block hang-up | State changes and broadcasts are real; every Twilio REST command (bridge, decline, hangup) is a logged stub in [provider_client.py](backend/app/telephony/provider_client.py) |
 | Greeting MP3 | Valid but silent |
 | Unblocking | No way to remove a number except by editing the database |
-| Caller names | Only whatever Twilio's caller-ID lookup returns — often absent, often generic. Saved contact names were removed for now |
+| Caller names | Requires Caller ID Lookup enabled on the number (paid, off by default). Without it every caller is a bare number — saved contact names were removed for now |
 | Auth | No login on the dashboard, no authorisation on the API — `blockedBy` is therefore unverified |
 | Providers | Twilio only. `<Gather input="speech">` has no direct equivalent elsewhere, so another provider means a real port, not a config change |

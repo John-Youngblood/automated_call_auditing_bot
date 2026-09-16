@@ -40,32 +40,39 @@ def answer_and_gather(
     action_url: str,
     speech_model: str = "phone_call",
     language: str = "en-US",
+    speech_timeout_seconds: int = 3,
 ) -> RenderedResponse:
     """Greet the caller, then listen for why they are calling.
 
-        <Response>
-          <Gather input="speech" action="…" speechTimeout="auto"
-                  actionOnEmptyResult="true">
-            <Play>…/greeting.mp3</Play>
-          </Gather>
-          <Redirect>…</Redirect>
-        </Response>
+            <Response>
+              <Gather input="speech" action="…" speechTimeout="auto"
+                      actionOnEmptyResult="true">
+                <Play>…/greeting.mp3</Play>
+              </Gather>
+              <Redirect>…</Redirect>
+            </Response>
 
-    ``<Play>`` sits *inside* ``<Gather>`` so the greeting doubles as the prompt
-    and Twilio is already listening as it finishes -- a caller who talks over
-    the greeting is still heard.
+        ``<Play>`` sits *inside* ``<Gather>`` so the greeting doubles as the prompt
+        and Twilio is already listening as it finishes -- a caller who talks over
+        the greeting is still heard.
 
-    ``speechTimeout="auto"`` is what makes this turn-based: Twilio decides when
-    the caller has stopped and posts the finished transcript to ``action_url``.
-    That end-of-speech detection is the entire reason this design needs no
-    audio streaming.
+    ``speechTimeout`` is what makes this turn-based: Twilio decides when the
+        caller has stopped and posts the finished transcript to ``action_url``.
+        That end-of-speech detection is the entire reason this design needs no
+        audio streaming.
 
-    ``actionOnEmptyResult`` makes the action fire even when the caller says
-    nothing, so a silent call still reaches the dashboard rather than hanging.
-    The trailing ``<Redirect>`` covers the same risk from the other side: if
-    ``<Gather>`` ever falls through, the call lands on the same endpoint
-    instead of running off the end of the document, which would hang up on
-    a caller who is still waiting.
+        It is a number of seconds, never ``"auto"``, for two reasons. Twilio warns
+        (error 13335) when ``auto`` is combined with a ``speechModel``, and we set
+        one. And ``auto`` stops at the *first* pause in speech, which would cut a
+        caller off mid-explanation -- fine for "say your account number", wrong for
+        "tell us why you are calling".
+
+        ``actionOnEmptyResult`` makes the action fire even when the caller says
+        nothing, so a silent call still reaches the dashboard rather than hanging.
+        The trailing ``<Redirect>`` covers the same risk from the other side: if
+        ``<Gather>`` ever falls through, the call lands on the same endpoint
+        instead of running off the end of the document, which would hang up on
+        a caller who is still waiting.
     """
     response = Element("Response")
 
@@ -76,7 +83,7 @@ def answer_and_gather(
             "input": "speech",
             "action": action_url,
             "method": "POST",
-            "speechTimeout": "auto",
+            "speechTimeout": str(speech_timeout_seconds),
             "speechModel": speech_model,
             "language": language,
             "actionOnEmptyResult": "true",
@@ -90,16 +97,23 @@ def answer_and_gather(
     return _document(response)
 
 
-def hold(queue_name: str) -> RenderedResponse:
+def hold(queue_name: str, action_url: str) -> RenderedResponse:
     """Park the caller while an operator reads their transcript.
 
     ``<Enqueue>`` earns its place: one verb holds the call open indefinitely
     with Twilio's built-in hold music -- no queue to pre-create, no hold audio
     to host, and no redirect loop to keep alive. Accepting the call dequeues
     it.
+
+    ``action`` is how we find out the caller gave up. Twilio requests it when
+    the call leaves the queue for any reason and passes ``QueueResult``
+    (``hangup`` when they hung up while waiting) plus ``QueueTime``. Without
+    it, a caller who abandons the queue leaves no trace and their card sits on
+    the dashboard until someone tries to put a dead line on air.
     """
     response = Element("Response")
-    SubElement(response, "Enqueue").text = queue_name
+    enqueue = SubElement(response, "Enqueue", {"action": action_url, "method": "POST"})
+    enqueue.text = queue_name
     return _document(response)
 
 

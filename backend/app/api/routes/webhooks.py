@@ -39,7 +39,7 @@ from fastapi.responses import Response
 from app.api.deps import BlocklistDep, HistoryDep, RegistryDep, SettingsDep
 from app.schemas.calls import Call, Caller, CallStatus
 from app.services.phone import format_location
-from app.telephony import answer_and_gather, hold, reject
+from app.telephony import RenderedResponse, answer_and_gather, hold, reject
 from app.telephony.signature import verify_twilio_signature
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["telephony"])
 
 SPEECH_RESULT_PATH = "/webhook/speech-result"
+QUEUE_EXIT_PATH = "/webhook/queue-exit"
+
+#: QueueResult values meaning the caller is gone rather than connected.
+#: "bridged" and "redirected" mean they reached a human, so whatever decision
+#: was already recorded stands.
+ABANDONED_QUEUE_RESULTS = frozenset({"hangup", "leave", "error", "system-error", "queue-full"})
 
 
 async def _form(request: Request) -> dict[str, str]:
@@ -109,7 +115,10 @@ async def incoming_call(
     number = params.get("From") or None
     caller = Caller(
         number=number,
-        # Whatever the carrier's caller-ID lookup returned, if anything.
+        # Twilio only sends CallerName if Caller ID Lookup is enabled on the
+        # number (VoiceCallerIdLookup), which is a paid per-lookup feature.
+        # Off by default -- so without it this is always None and every caller
+        # shows as a bare number.
         name=params.get("CallerName") or None,
         # Twilio derives these from the number's rate centre, not from where
         # the caller is -- see format_location.
@@ -134,6 +143,7 @@ async def incoming_call(
             action_url=f"{settings.public_base_url.rstrip('/')}{SPEECH_RESULT_PATH}",
             speech_model=settings.speech_model,
             language=settings.speech_language,
+            speech_timeout_seconds=settings.speech_timeout_seconds,
         )
     )
 
@@ -173,23 +183,86 @@ async def speech_result(
 
     # Hold them. The call stays open until an operator accepts, rejects, or
     # the caller hangs up.
-    return _twiml(hold(settings.hold_queue_name))
+    return _twiml(
+        hold(
+            settings.hold_queue_name,
+            f"{settings.public_base_url.rstrip('/')}{QUEUE_EXIT_PATH}",
+        )
+    )
 
 
-@router.post("/webhook/call-status", summary="Provider call-progress callbacks")
-async def call_status(request: Request, registry: RegistryDep) -> dict[str, str]:
+@router.post(
+    "/webhook/queue-exit",
+    summary="The caller left the hold queue",
+    response_class=Response,
+)
+async def queue_exit(
+    request: Request,
+    registry: RegistryDep,
+    settings: SettingsDep,
+) -> Response:
+    """Twilio requests this when a call leaves the hold queue.
+
+    ``QueueResult`` says why. ``hangup`` is the one that matters: the caller
+    gave up waiting, and this is the only thing that tells us -- nothing keeps
+    a connection to this service while they hold. ``QueueTime`` is how long
+    they waited, worth logging because a rising abandon time means the queue
+    is too slow.
+
+    ``bridged`` and ``redirected`` mean they were connected to a human, so the
+    decision already recorded stands and this leaves it alone.
+    """
+    params = await _form(request)
+    _check_signature(request, params, settings)
+
+    call_id = params.get("CallSid")
+    result = params.get("QueueResult", "unknown")
+    waited = params.get("QueueTime")
+
+    if call_id and result in ABANDONED_QUEUE_RESULTS:
+        logger.info("caller left the queue call_id=%s result=%s after=%ss", call_id, result, waited)
+        await registry.end(call_id)
+    else:
+        logger.info("queue exit call_id=%s result=%s after=%ss", call_id, result, waited)
+
+    # An action URL controls call flow, so this returns TwiML rather than the
+    # 204 a status callback wants. An empty document means "nothing further":
+    # correct for a caller who already hung up, and harmless for one being
+    # bridged, whose new instructions came from the redirect that dequeued
+    # them. Worth re-checking once the REST accept path is real.
+    return _twiml(RenderedResponse(body='<?xml version="1.0" encoding="UTF-8"?><Response />'))
+
+
+#: Twilio CallStatus values that mean the call is over. The non-terminal ones
+#: (queued, initiated, ringing, in-progress) are ignored.
+TERMINAL_CALL_STATUSES = frozenset({"completed", "busy", "failed", "no-answer", "canceled"})
+
+
+@router.post(
+    "/webhook/call-status",
+    summary="Provider call-progress callbacks",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def call_status(request: Request, registry: RegistryDep) -> Response:
     """Terminal call events.
 
-    Point Twilio's status callback here so the queue clears itself when a
-    caller hangs up while on hold -- otherwise their card sits there until
-    someone acts on a call that is already gone.
+    Point Twilio's status callback at this URL so the queue clears itself when
+    a caller hangs up while on hold -- otherwise their card sits there until
+    someone tries to act on a call that is already gone. It is configured per
+    number in the Twilio console; nothing here can set it.
+
+    Returns 204 deliberately. A status callback does not control call flow, so
+    Twilio wants either 204 or an empty ``<Response/>`` as text/xml -- anything
+    else (a JSON body, as this used to send) is logged as a warning in the
+    Twilio Debugger on every single call.
     """
     params = await _form(request)
     call_id = params.get("CallSid")
     state = params.get("CallStatus", "unknown")
-    if call_id and state in {"completed", "busy", "failed", "no-answer", "canceled"}:
+    if call_id and state in TERMINAL_CALL_STATUSES:
         await registry.end(call_id)
-    return {"status": "ok"}
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 async def _refuse_blocked_call(

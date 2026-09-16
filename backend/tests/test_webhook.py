@@ -31,9 +31,14 @@ def test_greeting_is_the_prompt_and_twilio_listens_after_it(client: TestClient) 
     gather = root.find("Gather")
     assert gather is not None
     assert gather.attrib["input"] == "speech"
-    # This attribute is what makes the design turn-based: Twilio decides when
-    # the caller stopped, so nothing here has to stream or analyse audio.
-    assert gather.attrib["speechTimeout"] == "auto"
+    # What makes the design turn-based: Twilio decides when the caller stopped,
+    # so nothing here has to stream or analyse audio.
+    #
+    # A number, never "auto". Twilio warns (error 13335) when "auto" is paired
+    # with a speechModel, and we set one -- and "auto" stops at the first pause
+    # in speech, which truncates a caller mid-explanation.
+    assert gather.attrib["speechTimeout"].isdigit()
+    assert gather.attrib["speechModel"] == "phone_call"
     # A silent caller must still reach the dashboard rather than vanishing.
     assert gather.attrib["actionOnEmptyResult"] == "true"
     assert gather.attrib["action"] == "https://calls.example.test/webhook/speech-result"
@@ -82,7 +87,12 @@ class TestSpeechResult:
         assert response.status_code == 200
         # <Enqueue> holds the call open with Twilio's own hold music -- no
         # queue to pre-create, no hold audio to host, no redirect loop.
-        assert fromstring(response.text).findtext("Enqueue") == "screening"
+        enqueue = fromstring(response.text).find("Enqueue")
+        assert enqueue is not None
+        assert enqueue.text == "screening"
+        # Without an action URL nothing ever tells us the caller gave up while
+        # holding -- there is no other connection to this service.
+        assert enqueue.attrib["action"] == "https://calls.example.test/webhook/queue-exit"
 
         call = client.get("/api/calls/CA0123456789").json()
         assert call["transcript"] == "I need to reschedule my appointment."
@@ -186,3 +196,113 @@ def test_call_status_webhook_clears_the_queue(client: TestClient) -> None:
         data={"CallSid": TWILIO_FORM["CallSid"], "CallStatus": "completed"},
     )
     assert client.get("/api/calls").json() == []
+
+
+class TestStatusCallbackContract:
+    """Twilio wants 204 or an empty <Response/> as text/xml from a status
+    callback. Anything else -- a JSON body, as this used to return -- is
+    logged as a Debugger warning on every call."""
+
+    def test_returns_204_with_no_body(self, client: TestClient) -> None:
+        response = client.post(
+            "/webhook/call-status",
+            data={"CallSid": "CA0123456789", "CallStatus": "completed"},
+        )
+
+        assert response.status_code == 204
+        assert response.content == b""
+
+    def test_non_terminal_statuses_are_ignored(self, client: TestClient) -> None:
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+
+        for state in ("queued", "initiated", "ringing", "in-progress"):
+            client.post(
+                "/webhook/call-status",
+                data={"CallSid": TWILIO_FORM["CallSid"], "CallStatus": state},
+            )
+
+        # Still live -- a ringing notification must not clear the queue.
+        assert len(client.get("/api/calls").json()) == 1
+
+    def test_every_terminal_status_ends_the_call(self, client: TestClient) -> None:
+        for state in ("completed", "busy", "failed", "no-answer", "canceled"):
+            call_id = f"CA-{state}"
+            client.post("/webhook/incoming-call", data={**TWILIO_FORM, "CallSid": call_id})
+            client.post("/webhook/call-status", data={"CallSid": call_id, "CallStatus": state})
+            assert client.get(f"/api/calls/{call_id}").json()["status"] == "ended"
+
+
+class TestQueueExit:
+    """Twilio requests the <Enqueue> action URL when a call leaves the queue.
+    QueueResult says why -- and `hangup` is the only thing that tells us a
+    caller gave up while holding."""
+
+    def hold_then_exit(self, client: TestClient, result: str, waited: str = "42"):
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        client.post(
+            "/webhook/speech-result",
+            data={"CallSid": TWILIO_FORM["CallSid"], "SpeechResult": "Hello."},
+        )
+        return client.post(
+            "/webhook/queue-exit",
+            data={
+                "CallSid": TWILIO_FORM["CallSid"],
+                "QueueResult": result,
+                "QueueTime": waited,
+            },
+        )
+
+    def test_hangup_ends_the_call(self, client: TestClient) -> None:
+        response = self.hold_then_exit(client, "hangup")
+
+        assert response.status_code == 200
+        assert client.get("/api/calls").json() == []
+        assert client.get(f"/api/calls/{TWILIO_FORM['CallSid']}").json()["status"] == "ended"
+
+    def test_returns_twiml_not_204(self, client: TestClient) -> None:
+        """An action URL controls call flow, so unlike a status callback it
+        must answer with TwiML."""
+        response = self.hold_then_exit(client, "hangup")
+
+        assert response.headers["content-type"].startswith("application/xml")
+        assert fromstring(response.text).tag == "Response"
+
+    def test_abandonment_is_broadcast(self, client: TestClient) -> None:
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        with client.websocket_connect("/ws/frontend") as ws:
+            ws.receive_json()  # snapshot
+            client.post(
+                "/webhook/queue-exit",
+                data={"CallSid": TWILIO_FORM["CallSid"], "QueueResult": "hangup"},
+            )
+            event = ws.receive_json()
+
+        assert event["type"] == "call.ended"
+        assert event["data"]["call"]["status"] == "ended"
+
+    def test_being_connected_leaves_the_decision_alone(self, client: TestClient) -> None:
+        """`bridged` means they reached a human, so an accepted call must not
+        be downgraded to `ended` when the queue reports the exit."""
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        client.post(f"/api/calls/{TWILIO_FORM['CallSid']}/accept")
+
+        client.post(
+            "/webhook/queue-exit",
+            data={"CallSid": TWILIO_FORM["CallSid"], "QueueResult": "bridged"},
+        )
+
+        assert client.get(f"/api/calls/{TWILIO_FORM['CallSid']}").json()["status"] == "accepted"
+
+    def test_every_abandon_result_ends_the_call(self, client: TestClient) -> None:
+        for result in ("hangup", "leave", "error", "system-error", "queue-full"):
+            call_id = f"CA-q-{result}"
+            client.post("/webhook/incoming-call", data={**TWILIO_FORM, "CallSid": call_id})
+            client.post("/webhook/queue-exit", data={"CallSid": call_id, "QueueResult": result})
+            assert client.get(f"/api/calls/{call_id}").json()["status"] == "ended"
+
+    def test_unknown_call_does_not_error(self, client: TestClient) -> None:
+        response = client.post(
+            "/webhook/queue-exit", data={"CallSid": "CA-ghost", "QueueResult": "hangup"}
+        )
+
+        assert response.status_code == 200

@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     speech_model: str = "phone_call"
     speech_language: str = "en-US"
 
+    #: Seconds of silence before Twilio decides the caller has finished.
+    #: Must be a positive integer, NOT "auto": Twilio warns (error 13335) if
+    #: speechTimeout="auto" is combined with a speechModel. A few seconds also
+    #: suits this use case better -- "auto" stops at the *first* pause, which
+    #: truncates a caller mid-explanation.
+    speech_timeout_seconds: int = Field(default=3, ge=1, le=60)
+
     #: Twilio queue callers wait in while an operator reads their transcript.
     #: Created on demand -- nothing to set up in the console.
     hold_queue_name: str = "screening"
