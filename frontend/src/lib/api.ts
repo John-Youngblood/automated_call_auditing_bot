@@ -13,7 +13,6 @@ import type {
   BlockNumberResult,
   Call,
   CallHistoryEntry,
-  Contact,
 } from '../types/events';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
@@ -45,24 +44,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   return (await response.json()) as T;
 }
-
-export const contactsApi = {
-  /**
-   * Create or update a contact. Omitted fields are left alone, so the star
-   * button can toggle a favourite without disturbing a name and vice versa —
-   * send an empty string to actually clear a name.
-   */
-  save: (number: string, changes: { displayName?: string; isFavorite?: boolean }) =>
-    request<Contact>('/api/contacts', {
-      method: 'POST',
-      body: JSON.stringify({ number, ...changes }),
-    }),
-  list: () => request<Contact[]>('/api/contacts'),
-  remove: (number: string) =>
-    request<{ status: string }>(`/api/contacts/${encodeURIComponent(number)}`, {
-      method: 'DELETE',
-    }),
-};
 
 export const moderationApi = {
   /**

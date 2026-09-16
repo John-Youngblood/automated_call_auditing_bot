@@ -145,27 +145,6 @@ in the moderation log by the UTC offset. The `UtcDateTime` type decorator in
 `db/models.py` normalises both directions; use it for any datetime column you
 add.
 
-## Contacts
-
-`contacts` holds the team's own labels on a number: a display name, a star, or
-both. One table rather than two, because naming and starring are the same act.
-
-Kept separate from `blocked_numbers`, though, which answers a different
-question and carries its own provenance (who blocked, when, why). A number can
-appear in both — naming a nuisance caller is precisely how you recognise them.
-
-Resolution happens at two different moments, on purpose:
-
-- **Live calls** resolve name and star in the webhook, once, as the call
-  arrives. Cheap, and the dashboard renders without cross-referencing.
-  Naming someone mid-call therefore leaves the call stale, so the contacts
-  route re-resolves calls already in flight and republishes them.
-- **History rows** resolve at read time against the current contact, so naming
-  a caller retroactively labels every past call from them.
-
-A contact that ends up with no name and no star is deleted rather than stored,
-which keeps "remove name" safe to offer whether or not a saved name existed.
-
 ## Scaling out
 
 Deliberately one uvicorn worker: `CallRegistry`, `Broadcaster` and the

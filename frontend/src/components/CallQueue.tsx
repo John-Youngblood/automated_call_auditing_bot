@@ -88,11 +88,6 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
         <span className="call-row__head">
           <span className="call-row__identity">
             <span className="call-row__number">
-              {call.caller.isFavorite && (
-                <span className="star star--inline" aria-label="Favourite">
-                  ★
-                </span>
-              )}
               {call.caller.name ?? formatPhoneNumber(call.caller.number)}
             </span>
             <span className="call-row__meta">

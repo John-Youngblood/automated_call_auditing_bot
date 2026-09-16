@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, TypeDecorator
+from sqlalchemy import DateTime, Index, Integer, String, Text, TypeDecorator
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -83,44 +83,6 @@ class BlockedNumber(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<BlockedNumber {self.number}>"
-
-
-class Contact(Base):
-    """A number the team has put a label on.
-
-    Naming a caller and starring one are the same act -- attaching your own
-    metadata to a phone number -- so they share a row rather than living in
-    two tables that would have to be kept in step.
-
-    Kept separate from ``blocked_numbers``, though, because that table answers
-    a different question and carries its own provenance (who blocked, when,
-    why). A number can appear in both, which is not a contradiction: the point
-    of naming a nuisance caller is to recognise them.
-    """
-
-    __tablename__ = "contacts"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-
-    #: Normalised E.164 (see app.services.phone), same key as the blocklist.
-    number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
-
-    #: What to show instead of the bare number. Takes precedence over the
-    #: caller-ID name the carrier supplies, which is often stale or wrong.
-    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-
-    #: Starred. Surfaced prominently and warned about before blocking.
-    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        UtcDateTime, default=_utcnow, onupdate=_utcnow, nullable=False
-    )
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        star = "*" if self.is_favorite else ""
-        label = f" {self.display_name}" if self.display_name else ""
-        return f"<Contact {star}{self.number}{label}>"
 
 
 class CallHistory(Base):

@@ -92,20 +92,6 @@ class CallRegistry:
         self._publish(ServerEventType.CALL_INCOMING, call)
         return call
 
-    def update_caller(self, call_id: str, *, name: str | None, is_favorite: bool) -> Call | None:
-        """Re-apply contact details to a call already in the queue.
-
-        Called when someone names or stars a caller mid-call: the call was
-        resolved when it arrived, so it holds stale details until this runs.
-        """
-        call = self._calls.get(call_id)
-        if call is None:
-            return None
-        call.caller.name = name or call.caller.name
-        call.caller.is_favorite = is_favorite
-        self._publish(ServerEventType.CALL_UPDATED, call)
-        return call
-
     async def set_transcript(
         self, call_id: str, text: str, confidence: float | None = None
     ) -> Call | None:

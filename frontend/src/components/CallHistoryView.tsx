@@ -1,5 +1,4 @@
 import { formatClock, formatDuration, formatPhoneNumber, statusLabel } from '../lib/format';
-import FavoriteStar from './FavoriteStar';
 import type { CallHistoryEntry } from '../types/events';
 
 interface Props {
@@ -8,9 +7,6 @@ interface Props {
   error: string | null;
   onRefresh: () => void;
   onBlock: (entry: CallHistoryEntry) => void;
-  onToggleFavorite: (entry: CallHistoryEntry) => void;
-  onName: (entry: CallHistoryEntry) => void;
-  pendingNumber: string | null;
 }
 
 /**
@@ -30,9 +26,6 @@ export default function CallHistoryView({
   error,
   onRefresh,
   onBlock,
-  onToggleFavorite,
-  onName,
-  pendingNumber,
 }: Props) {
   return (
     <section className="history" aria-label="Call history">
@@ -76,14 +69,7 @@ export default function CallHistoryView({
             </thead>
             <tbody>
               {entries.map((entry) => (
-                <HistoryRow
-                  key={entry.callId}
-                  entry={entry}
-                  onBlock={onBlock}
-                  onToggleFavorite={onToggleFavorite}
-                  onName={onName}
-                  pendingNumber={pendingNumber}
-                />
+                <HistoryRow key={entry.callId} entry={entry} onBlock={onBlock} />
               ))}
             </tbody>
           </table>
@@ -96,18 +82,11 @@ export default function CallHistoryView({
 function HistoryRow({
   entry,
   onBlock,
-  onToggleFavorite,
-  onName,
-  pendingNumber,
 }: {
   entry: CallHistoryEntry;
   onBlock: (entry: CallHistoryEntry) => void;
-  onToggleFavorite: (entry: CallHistoryEntry) => void;
-  onName: (entry: CallHistoryEntry) => void;
-  pendingNumber: string | null;
 }) {
   const canBlock = Boolean(entry.fromNumber) && !entry.isBlocked;
-  const label = entry.fromName ?? formatPhoneNumber(entry.fromNumber);
 
   return (
     <tr>
@@ -117,25 +96,10 @@ function HistoryRow({
       </td>
 
       <td>
-        <span className="history__caller">
-          <FavoriteStar
-            isFavorite={entry.isFavorite}
-            disabled={!entry.fromNumber}
-            pending={pendingNumber === entry.fromNumber}
-            onToggle={() => onToggleFavorite(entry)}
-            label={label}
-          />
-          {/* Clicking the caller opens the naming dialog -- the action people
-              reach for right after recognising someone in the log. */}
-          <button
-            type="button"
-            className="history__number-button"
-            onClick={() => onName(entry)}
-            disabled={!entry.fromNumber}
-            title={entry.fromNumber ? `Name ${label}` : 'Caller ID was withheld'}
-          >
-            {entry.fromName ?? formatPhoneNumber(entry.fromNumber)}
-          </button>
+        {/* Carrier caller-ID name when there is one, with the number below it;
+            otherwise the number is the heading. */}
+        <span className="history__number">
+          {entry.fromName ?? formatPhoneNumber(entry.fromNumber)}
         </span>
         <span className="history__caller-meta">
           {[entry.fromName ? formatPhoneNumber(entry.fromNumber) : null, entry.fromLocation]

@@ -15,7 +15,6 @@ from sqlalchemy import select
 from app.db.models import CallHistory
 from app.db.session import Database
 from app.schemas.calls import Call
-from app.schemas.contacts import ContactOut
 from app.schemas.moderation import CallHistoryEntry
 from app.services.phone import try_normalize
 
@@ -65,20 +64,13 @@ class CallHistoryRepository:
             row.transcript = call.transcript or None
 
     async def recent(
-        self,
-        limit: int = 100,
-        blocked: frozenset[str] | None = None,
-        contacts: dict[str, ContactOut] | None = None,
+        self, limit: int = 100, blocked: frozenset[str] | None = None
     ) -> list[CallHistoryEntry]:
         """Most recent calls first.
 
-        ``blocked`` and ``contacts`` are passed in rather than looked up here,
-        so the history view can mark blocked and starred callers without this
-        module depending on either service -- one query, no N+1, no coupling.
-
-        Names resolve against the *current* contact rather than the one stored
-        on the row, so naming a caller retroactively labels every past call
-        from them.
+        ``blocked`` is passed in rather than looked up here, so the history
+        view can mark blocked callers without this module depending on the
+        blocklist -- one query, no N+1, no coupling.
         """
         async with self._db.session() as session:
             rows = (
@@ -92,13 +84,12 @@ class CallHistoryRepository:
             )
 
         blocked = blocked or frozenset()
-        contacts = contacts or {}
-        return [_to_schema(row, blocked, contacts) for row in rows]
+        return [_to_schema(row, blocked) for row in rows]
 
     async def get(self, call_id: str) -> CallHistoryEntry | None:
         async with self._db.session() as session:
             row = await session.get(CallHistory, call_id)
-        return _to_schema(row, frozenset(), {}) if row is not None else None
+        return _to_schema(row, frozenset()) if row is not None else None
 
 
 def summarize(transcript: str | None) -> str:
@@ -115,14 +106,11 @@ def summarize(transcript: str | None) -> str:
     return clipped + "…"
 
 
-def _to_schema(
-    row: CallHistory, blocked: frozenset[str], contacts: dict[str, ContactOut]
-) -> CallHistoryEntry:
-    contact = contacts.get(row.from_number) if row.from_number else None
+def _to_schema(row: CallHistory, blocked: frozenset[str]) -> CallHistoryEntry:
     return CallHistoryEntry(
         call_id=row.call_id,
         from_number=row.from_number,
-        from_name=(contact.display_name if contact and contact.display_name else row.from_name),
+        from_name=row.from_name,
         from_location=row.from_location,
         to_number=row.to_number,
         status=row.status,
@@ -131,5 +119,4 @@ def _to_schema(
         duration_seconds=row.duration_seconds,
         transcript_summary=summarize(row.transcript),
         is_blocked=row.from_number is not None and row.from_number in blocked,
-        is_favorite=contact is not None and contact.is_favorite,
     )

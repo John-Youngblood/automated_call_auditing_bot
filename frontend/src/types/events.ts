@@ -39,7 +39,6 @@ export interface Caller {
    * Not the caller's actual location: a ported mobile keeps its old area code.
    */
   location: string | null;
-  isFavorite: boolean;
 }
 
 export interface Call {
@@ -116,8 +115,6 @@ export interface CallHistoryEntry {
   transcriptSummary: string;
   /** Whether this caller is already on the blocklist. */
   isBlocked: boolean;
-  /** Starred right now — resolved server-side at read time. */
-  isFavorite: boolean;
 }
 
 export interface BlockedNumber {
@@ -140,13 +137,4 @@ export interface BlockNumberResult {
   newlyBlocked: boolean;
   terminatedCallIds: string[];
   failedCallIds: string[];
-}
-
-/** A number the team has put its own label on: a name, a star, or both. */
-export interface Contact {
-  number: string;
-  displayName: string | null;
-  isFavorite: boolean;
-  createdAt: string;
-  updatedAt: string;
 }

@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from app.api.deps import BlocklistDep, ContactsDep, HistoryDep, RegistryDep, SettingsDep
+from app.api.deps import BlocklistDep, HistoryDep, RegistryDep, SettingsDep
 from app.schemas.calls import Call, Caller, CallStatus
 from app.services.phone import format_location
 from app.telephony import answer_and_gather, hold, reject
@@ -99,7 +99,6 @@ async def incoming_call(
     settings: SettingsDep,
     blocklist: BlocklistDep,
     history: HistoryDep,
-    contacts: ContactsDep,
 ) -> Response:
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -110,9 +109,8 @@ async def incoming_call(
     number = params.get("From") or None
     caller = Caller(
         number=number,
-        # A saved contact name beats the carrier's caller ID, which is often
-        # stale or generic ("WIRELESS CALLER").
-        name=contacts.resolve_name(number, params.get("CallerName") or None),
+        # Whatever the carrier's caller-ID lookup returned, if anything.
+        name=params.get("CallerName") or None,
         # Twilio derives these from the number's rate centre, not from where
         # the caller is -- see format_location.
         location=format_location(
@@ -120,7 +118,6 @@ async def incoming_call(
             params.get("FromState"),
             params.get("FromCountry"),
         ),
-        is_favorite=contacts.is_favorite(number),
     )
 
     # Blocklist first, before anything expensive. An in-memory set lookup, so

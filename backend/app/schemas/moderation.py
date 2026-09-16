@@ -66,6 +66,3 @@ class CallHistoryEntry(CamelModel):
     #: Whether this caller is on the blocklist right now, so the history view
     #: can disable a Block button that would be a no-op.
     is_blocked: bool = False
-    #: Starred right now. Resolved at read time rather than stored, so naming
-    #: or starring a caller updates every past call from them at once.
-    is_favorite: bool = False
