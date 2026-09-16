@@ -7,8 +7,10 @@
  */
 
 export type CallStatus =
-  | 'ringing'
+  /** Caller is saying why they are calling; Twilio is still listening. */
   | 'screening'
+  /** Transcript is in; the call is on hold awaiting an operator decision. */
+  | 'on-hold'
   | 'accepted'
   | 'rejected'
   | 'ended'

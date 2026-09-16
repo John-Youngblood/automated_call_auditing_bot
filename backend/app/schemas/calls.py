@@ -24,12 +24,13 @@ class CamelModel(BaseModel):
 
 
 class CallStatus(StrEnum):
-    #: Greeting is playing and the caller is describing why they are calling.
-    #: Nothing is on the dashboard to act on yet.
-    RINGING = "ringing"
+    #: The greeting has played and the caller is saying why they are calling.
+    #: Twilio is listening; there is nothing to act on yet.
+    SCREENING = "screening"
     #: The caller has finished and their transcript is on the dashboard. They
     #: are on hold, waiting for an operator to decide.
-    SCREENING = "screening"
+    #: Hyphenated because this value is also used as a CSS class suffix.
+    ON_HOLD = "on-hold"
     ACCEPTED = "accepted"
     #: A human declined the call.
     REJECTED = "rejected"
@@ -73,7 +74,7 @@ class Call(CamelModel):
     """Public view of a call. This is what the dashboard renders."""
 
     call_id: str
-    status: CallStatus = CallStatus.RINGING
+    status: CallStatus = CallStatus.SCREENING
     caller: Caller = Field(default_factory=Caller)
     to_number: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

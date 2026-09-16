@@ -1,4 +1,4 @@
-import { formatElapsed, formatPhoneNumber } from '../lib/format';
+import { formatElapsed, formatPhoneNumber, statusLabel } from '../lib/format';
 import type { Call } from '../types/events';
 
 interface Props {
@@ -73,7 +73,7 @@ interface RowProps {
 function QueueRow({ call, selected, onSelect, now }: RowProps) {
   // The transcript doubles as a preview, so an operator can triage from the
   // list without opening every call.
-  const preview = call.transcript ?? (call.status === 'ringing' ? 'Still speaking…' : null);
+  const preview = call.transcript ?? (call.status === 'screening' ? 'Still speaking…' : null);
 
   return (
     <li>
@@ -83,15 +83,28 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
         onClick={() => onSelect(call.callId)}
         aria-current={selected}
       >
-        <span className="call-row__top">
-          <span className="call-row__number">
-            {call.caller.isFavorite && (
-              <span className="star star--inline" aria-label="Favourite">
-                ★
-              </span>
-            )}
-            {call.caller.name ?? formatPhoneNumber(call.caller.number)}
+        {/* Head and preview sit side by side on a wide queue and stack when it
+            narrows -- flex-wrap handles both without a media query. */}
+        <span className="call-row__head">
+          <span className="call-row__identity">
+            <span className="call-row__number">
+              {call.caller.isFavorite && (
+                <span className="star star--inline" aria-label="Favourite">
+                  ★
+                </span>
+              )}
+              {call.caller.name ?? formatPhoneNumber(call.caller.number)}
+            </span>
+            <span className="call-row__meta">
+              <span className={`status status--${call.status}`}>{statusLabel(call.status)}</span>
+              {/* Name replaces the number above, so show the number here --
+                  an operator often needs to read it out or cross-reference it. */}
+              {call.caller.name && call.caller.number && (
+                <span className="call-row__alt">{formatPhoneNumber(call.caller.number)}</span>
+              )}
+            </span>
           </span>
+
           {/* Counts up live while the call is open, then freezes at its
               total duration once it ends. */}
           <span className="call-row__timer">
@@ -101,14 +114,7 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
             )}
           </span>
         </span>
-        <span className="call-row__meta">
-          <span className={`status status--${call.status}`}>{call.status}</span>
-          {/* Name replaces the number above, so show the number here -- an
-              operator often needs to read it out or cross-reference it. */}
-          {call.caller.name && call.caller.number && (
-            <span className="call-row__name">{formatPhoneNumber(call.caller.number)}</span>
-          )}
-        </span>
+
         {preview && <span className="call-row__preview">{preview}</span>}
       </button>
     </li>

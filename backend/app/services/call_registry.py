@@ -121,8 +121,8 @@ class CallRegistry:
 
         call.transcript = text or None
         call.transcript_confidence = confidence
-        if call.status is CallStatus.RINGING:
-            call.status = CallStatus.SCREENING
+        if call.status is CallStatus.SCREENING:
+            call.status = CallStatus.ON_HOLD
 
         logger.info(
             "transcript call_id=%s confidence=%s chars=%s", call_id, confidence, len(text or "")

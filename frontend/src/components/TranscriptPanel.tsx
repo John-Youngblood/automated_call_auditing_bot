@@ -15,13 +15,13 @@ const LOW_CONFIDENCE = 0.6;
  * thing is here.
  */
 export default function TranscriptPanel({ call }: Props) {
-  const waiting = call.status === 'ringing';
+  const stillSpeaking = call.status === 'screening';
   const lowConfidence =
     call.transcriptConfidence !== null && call.transcriptConfidence < LOW_CONFIDENCE;
 
   return (
     <div className="transcript">
-      {waiting ? (
+      {stillSpeaking ? (
         <p className="transcript__pending">
           <span className="transcript__dots" aria-hidden="true" />
           Greeting is playing. Waiting for the caller to describe why they’re calling…

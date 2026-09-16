@@ -5,7 +5,7 @@ import { useContacts } from '../hooks/useContacts';
 import { useCallHistory } from '../hooks/useCallHistory';
 import { useCallStream } from '../hooks/useCallStream';
 import { useNow } from '../hooks/useNow';
-import { formatClock, formatElapsed, formatPhoneNumber } from '../lib/format';
+import { formatClock, formatElapsed, formatPhoneNumber, statusLabel } from '../lib/format';
 import type { Call, CallHistoryEntry } from '../types/events';
 import CallActions from './CallActions';
 import CallHistoryView from './CallHistoryView';
@@ -228,7 +228,7 @@ export default function Dashboard() {
                   </div>
                   <div className="detail__timing">
                     <span className={`status status--${selectedCall.status}`}>
-                      {selectedCall.status}
+                      {statusLabel(selectedCall.status)}
                     </span>
                     <span className="detail__elapsed">
                       {formatElapsed(

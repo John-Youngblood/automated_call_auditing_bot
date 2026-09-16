@@ -26,3 +26,19 @@ export function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
 }
+
+/**
+ * Human label for a call status.
+ *
+ * Status values double as CSS class suffixes, so they are slugs and cannot
+ * contain spaces. Everything an operator reads goes through here instead of
+ * rendering the raw value, which kept working only as long as every status
+ * happened to be one word.
+ */
+const STATUS_LABELS: Record<string, string> = {
+  'on-hold': 'on hold',
+};
+
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status;
+}

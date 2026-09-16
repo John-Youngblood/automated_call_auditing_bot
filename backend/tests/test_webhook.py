@@ -16,6 +16,7 @@ TWILIO_FORM = {
     "FromCity": "Portland",
     "FromState": "OR",
     "FromCountry": "US",
+    # Twilio's own vocabulary for the call leg, unrelated to our CallStatus.
     "CallStatus": "ringing",
 }
 
@@ -52,7 +53,7 @@ def test_call_enters_the_queue_with_caller_details(client: TestClient) -> None:
     calls = client.get("/api/calls").json()
     assert len(calls) == 1
     assert calls[0]["callId"] == "CA0123456789"
-    assert calls[0]["status"] == "ringing"
+    assert calls[0]["status"] == "screening"
     assert calls[0]["caller"]["number"] == "+15551230000"
     # State, not country: "Portland, US" tells a US operator nothing.
     assert calls[0]["caller"]["location"] == "Portland, OR"
@@ -87,7 +88,7 @@ class TestSpeechResult:
         assert call["transcript"] == "I need to reschedule my appointment."
         assert call["transcriptConfidence"] == 0.94
         # Now awaiting a human, rather than still talking.
-        assert call["status"] == "screening"
+        assert call["status"] == "on-hold"
 
     def test_silent_caller_still_reaches_the_dashboard(self, client: TestClient) -> None:
         """actionOnEmptyResult fires with no SpeechResult. The call must still
@@ -99,7 +100,7 @@ class TestSpeechResult:
         assert response.status_code == 200
         call = client.get("/api/calls/CA0123456789").json()
         assert call["transcript"] is None
-        assert call["status"] == "screening"
+        assert call["status"] == "on-hold"
 
     def test_missing_confidence_is_tolerated(self, client: TestClient) -> None:
         client.post("/webhook/incoming-call", data=TWILIO_FORM)

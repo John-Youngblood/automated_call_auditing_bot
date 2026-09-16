@@ -1,4 +1,4 @@
-import { formatClock, formatDuration, formatPhoneNumber } from '../lib/format';
+import { formatClock, formatDuration, formatPhoneNumber, statusLabel } from '../lib/format';
 import FavoriteStar from './FavoriteStar';
 import type { CallHistoryEntry } from '../types/events';
 
@@ -145,7 +145,7 @@ function HistoryRow({
       </td>
 
       <td>
-        <span className={`status status--${entry.status}`}>{entry.status}</span>
+        <span className={`status status--${entry.status}`}>{statusLabel(entry.status)}</span>
         {entry.durationSeconds !== null && (
           <span className="history__duration">{formatDuration(entry.durationSeconds)}</span>
         )}

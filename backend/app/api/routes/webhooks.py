@@ -129,7 +129,7 @@ async def incoming_call(
         return await _refuse_blocked_call(call_id, caller, params.get("To"), settings, history)
 
     registry.register_incoming(call_id, caller=caller, to_number=params.get("To"))
-    logger.info("call ringing call_id=%s from=%s", call_id, caller.number)
+    logger.info("call screening call_id=%s from=%s", call_id, caller.number)
 
     return _twiml(
         answer_and_gather(

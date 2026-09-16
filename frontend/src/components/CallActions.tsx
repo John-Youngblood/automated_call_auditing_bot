@@ -1,3 +1,4 @@
+import { statusLabel } from '../lib/format';
 import type { Call } from '../types/events';
 import { isTerminal } from '../types/events';
 
@@ -29,12 +30,14 @@ export default function CallActions({ call, pending, onAccept, onReject, onBlock
   if (decided) {
     return (
       <div className="actions actions--resolved">
-        <span className={`status status--${call.status} status--large`}>{call.status}</span>
+        <span className={`status status--${call.status} status--large`}>
+          {statusLabel(call.status)}
+        </span>
         <span className="actions__hint">{RESOLUTION_HINTS[call.status] ?? 'Call ended.'}</span>
         {canBlock && call.status !== 'blocked' && (
           <button
             type="button"
-            className="button button--ghost button--compact actions__late-block"
+            className="button button--danger button--compact actions__late-block"
             onClick={() => onBlock(call)}
           >
             Block caller
@@ -62,6 +65,10 @@ export default function CallActions({ call, pending, onAccept, onReject, onBlock
       >
         {pending ? 'Working…' : 'Reject Call'}
       </button>
+      {/* A thematic break, not decoration: everything above decides this call,
+          everything below bars the caller from every future one. */}
+      <hr className="actions__rule" />
+
       <button
         type="button"
         className="button button--danger button--block"
