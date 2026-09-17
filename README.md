@@ -177,9 +177,10 @@ someone needs blocking the call is usually already over.
    number if you want caller names. It is off by default and billed per
    lookup; without it `CallerName` is never sent and every caller shows as a
    bare number.
-7. Replace the silent placeholder greeting
-   (`backend/app/static/greeting.mp3`) with a real recording that asks the
-   caller to state their reason, or set `GREETING_AUDIO_URL`.
+7. Check the greeting (`backend/app/static/greeting.mp3`) still says what you
+   want. It plays inside `<Gather>`, so it *is* the prompt — it has to ask the
+   caller to state their reason. Set `GREETING_AUDIO_URL` to host it
+   elsewhere.
 
 `SPEECH_MODEL` defaults to `phone_call`, which is tuned for 8kHz telephony
 audio. The default model is trained on wideband and does noticeably worse down
@@ -227,7 +228,6 @@ See [docs/architecture.md](docs/architecture.md) for the scale-out path.
 | Area | State |
 | --- | --- |
 | Accept / Reject / Block hang-up | State changes and broadcasts are real; every Twilio REST command (bridge, decline, hangup) is a logged stub in [provider_client.py](backend/app/telephony/provider_client.py) |
-| Greeting MP3 | Valid but silent |
 | Unblocking | No way to remove a number except by editing the database |
 | Caller names | Requires Caller ID Lookup enabled on the number (paid, off by default). Without it every caller is a bare number — saved contact names were removed for now |
 | Auth | No login on the dashboard, no authorisation on the API — `blockedBy` is therefore unverified |

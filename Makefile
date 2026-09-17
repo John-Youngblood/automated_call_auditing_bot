@@ -1,6 +1,6 @@
 # Convenience wrappers. Everything here is a one-liner you can also run by hand.
 .DEFAULT_GOAL := help
-.PHONY: help up down logs build install test lint fmt check simulate greeting tunnel url clean
+.PHONY: help up down logs build install test lint fmt check simulate tunnel url clean
 
 BACKEND := backend
 FRONTEND := frontend
@@ -52,9 +52,6 @@ tunnel: ## Open a public tunnel for Twilio and point the app at it
 
 url: ## Print the current public tunnel URL
 	@cat .tunnel-url 2>/dev/null || echo "No tunnel running. Start one with: make tunnel"
-
-greeting: ## Regenerate the placeholder greeting MP3
-	$(PY) $(BACKEND)/scripts/make_placeholder_greeting.py
 
 clean: ## Remove build artefacts and virtualenvs
 	rm -rf $(VENV) $(FRONTEND)/node_modules $(FRONTEND)/dist
