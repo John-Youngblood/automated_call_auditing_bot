@@ -7,7 +7,7 @@ work on the dashboard with no phone number, no tunnel, and no real caller.
 
     python scripts/simulate_call.py                 # one call
     python scripts/simulate_call.py --calls 3       # a small queue
-    python scripts/simulate_call.py --say "I need to reschedule an appointment"
+    python scripts/simulate_call.py --say "I have a question for your guest"
 """
 
 from __future__ import annotations
@@ -20,14 +20,19 @@ import sys
 
 import httpx
 
+#: What a caller might say when asked why they are calling. Deliberately a
+#: mix: a good caller, a rambler, someone on the wrong number, and one you
+#: would reach for the Block button on -- the screening queue has to be
+#: exercised with all four, not just the easy one.
 REASONS = [
-    "Hi, this is Dana from Northgate Medical billing. I'm following up on an "
-    "outstanding invoice for one of your patients and I need to confirm some details.",
-    "I'm calling to reschedule my appointment next Tuesday, something came up at work "
-    "and I can't make the morning slot.",
-    "Yeah, hi, I've been on hold with you people three times today and nobody can tell me "
-    "why my prescription hasn't been sent to the pharmacy.",
-    "Hello, I'd like to ask about the results from the blood work I had done last week.",
+    "Hi, long-time listener. I wanted to push back on something your guest said "
+    "about remote work, because my experience has been pretty much the opposite.",
+    "Yeah, I've got a question for the guest -- how did they actually get started? "
+    "I've been trying to do the same thing for about two years now and I keep "
+    "hitting the same wall, so anything they can share would help.",
+    "Is this the show? Hello? Sorry, I'm not sure I've got the right number.",
+    "You people have no idea what you're talking about and I'm sick of hearing it "
+    "every single week.",
 ]
 
 

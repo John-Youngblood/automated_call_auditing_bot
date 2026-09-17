@@ -12,7 +12,7 @@ TWILIO_FORM = {
     "CallSid": "CA0123456789",
     "From": "+15551230000",
     "To": "+15559990000",
-    "CallerName": "Northgate Medical",
+    "CallerName": "Listener Line",
     "FromCity": "Portland",
     "FromState": "OR",
     "FromCountry": "US",
@@ -82,7 +82,7 @@ class TestSpeechResult:
     def test_transcript_lands_on_the_call_and_the_caller_is_held(self, client: TestClient) -> None:
         client.post("/webhook/incoming-call", data=TWILIO_FORM)
 
-        response = self.speak(client, "I need to reschedule my appointment.")
+        response = self.speak(client, "I have a question for your guest.")
 
         assert response.status_code == 200
         # <Enqueue> holds the call open with Twilio's own hold music -- no
@@ -95,7 +95,7 @@ class TestSpeechResult:
         assert enqueue.attrib["action"] == "https://calls.example.test/webhook/queue-exit"
 
         call = client.get("/api/calls/CA0123456789").json()
-        assert call["transcript"] == "I need to reschedule my appointment."
+        assert call["transcript"] == "I have a question for your guest."
         assert call["transcriptConfidence"] == 0.94
         # Now awaiting a human, rather than still talking.
         assert call["status"] == "on-hold"

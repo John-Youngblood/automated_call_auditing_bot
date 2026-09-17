@@ -179,7 +179,8 @@ Currently suitable for a trusted network, not the public internet:
   pointing a real number at this — note it covers *both* webhooks, because an
   unsigned post to `/webhook/speech-result` could put words in a caller's
   mouth.
-- Transcripts are personal data, and in a healthcare context likely PHI.
+- Transcripts are personal data: a caller's number alongside whatever they
+  chose to say about themselves.
   `call_history` persists them past restart, so retention is a decision you are
   already making by default. Nothing here is encrypted at rest or deleted on a
   schedule.

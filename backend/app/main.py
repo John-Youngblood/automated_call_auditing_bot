@@ -32,11 +32,18 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def configure_logging(level: str) -> None:
+    """Apply LOG_LEVEL to this application only.
+
+    The root logger stays at WARNING deliberately. Setting it to the
+    configured level would make LOG_LEVEL=DEBUG unusable -- asyncio, aiosqlite
+    and httpx would bury our own lines in per-query and per-socket chatter.
+    """
     logging.basicConfig(
-        level=level.upper(),
+        level=logging.WARNING,
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    logging.getLogger("app").setLevel(level.upper())
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 

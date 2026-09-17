@@ -58,7 +58,13 @@ ABANDONED_QUEUE_RESULTS = frozenset({"hangup", "leave", "error", "system-error",
 async def _form(request: Request) -> dict[str, str]:
     """Twilio posts ``application/x-www-form-urlencoded``, always."""
     form = await request.form()
-    return {str(k): str(v) for k, v in form.items()}
+    params = {str(k): str(v) for k, v in form.items()}
+    # At DEBUG only: these carry the caller's number. Invaluable when a field
+    # you expected is missing -- Twilio sends some geographic parameters as
+    # empty strings rather than omitting them, which is indistinguishable from
+    # "absent" unless you can see the raw body.
+    logger.debug("%s params=%r", request.url.path, params)
+    return params
 
 
 def _check_signature(request: Request, params: dict[str, str], settings: SettingsDep) -> None:

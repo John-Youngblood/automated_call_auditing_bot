@@ -110,9 +110,14 @@ class CallRegistry:
         if call.status is CallStatus.SCREENING:
             call.status = CallStatus.ON_HOLD
 
+        # Length at INFO, content at DEBUG. A transcript is a member of the
+        # public talking about themselves, so writing it into container logs
+        # should be a choice someone makes rather than the default. Set
+        # LOG_LEVEL=DEBUG locally when you want to read them.
         logger.info(
             "transcript call_id=%s confidence=%s chars=%s", call_id, confidence, len(text or "")
         )
+        logger.debug("transcript call_id=%s text=%r", call_id, text)
         self._publish(ServerEventType.CALL_UPDATED, call)
         return call
 
