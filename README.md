@@ -1,6 +1,8 @@
-# Call Screener
+# H3 Call Screener
 
-Screens inbound phone calls for a live podcast. A caller is greeted, asked why
+![h3_logo.png](frontend/public/h3_logo.png)
+
+Screens inbound phone calls for the H3 live podcast. A caller is greeted, asked why
 they're calling, and put on hold. Their transcribed reason appears on a
 dashboard where an operator puts them on air or turns them away.
 
@@ -202,4 +204,6 @@ say so rather than looking like a caller who stayed silent.
 | Auth | No login on the dashboard, no authorisation on the API — including the endpoint that takes the show off air and hangs up on every caller |
 | One on-air slot | Accepting a second caller while one is live dials a busy host. Nothing prevents it; the outcome is reported honestly |
 | Caller names | Needs Caller ID Lookup on the number (paid, off by default) |
+| Blocking / favourites | No way to bar a repeat troll or flag a good caller. Needs E.164 normalisation back (it was removed with the blocklist) and somewhere durable to keep the list — a blocklist that empties on deploy is not a blocklist |
+| Persistent call history | History lives in memory, capped at `CALL_HISTORY_SIZE` and cleared on restart. A database would also carry the transcript through a restart, which is the one thing reconciliation cannot recover |
 | Single worker | Call state and dashboard fan-out are in-process — see `docs/architecture.md` |
