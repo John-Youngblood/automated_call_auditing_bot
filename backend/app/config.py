@@ -8,10 +8,14 @@ has to reach for ``os.environ``. Import :func:`get_settings`, never construct
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Bundled audio, served at /static by main.py.
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 class Settings(BaseSettings):
@@ -31,8 +35,29 @@ class Settings(BaseSettings):
     #: "localhost" only works when they are mocked.
     public_base_url: str = "http://localhost:8000"
 
-    # --- Telephony ---------------------------------------------------------
+    # --- What the caller hears ---------------------------------------------
+    # Every prompt below is a pair: an audio file, and text to fall back on.
+    # A recording wins when one is set; otherwise Twilio speaks the text in
+    # TTS_VOICE. That means a fresh deployment says something sensible with
+    # nothing recorded, and a produced show can replace each line one at a
+    # time without touching code.
+    #
+    # Audio settings take an absolute URL or a bare filename served from
+    # app/static/ -- see _audio_url.
+
+    #: Twilio text-to-speech voice for every spoken fallback. Amazon Polly
+    #: names (Polly.Joanna, Polly.Matthew, ...) or Twilio's basic man/woman.
+    #: One setting, not one per prompt: a show that speaks in two different
+    #: synthetic voices sounds broken rather than varied.
+    tts_voice: str = "Polly.Joanna"
+
+    #: The greeting, which is also the *prompt* -- it plays inside <Gather>,
+    #: so whatever is said here has to ask the caller to state their reason.
     greeting_audio_url: str = ""
+    greeting_message: str = (
+        "Thanks for calling the show. After the beep, tell us your name and "
+        "what you would like to talk about, then stay on the line."
+    )
 
     #: Twilio's speech model and language for <Gather input="speech">.
     #: "phone_call" is tuned for 8kHz telephony audio; the default model is
@@ -63,16 +88,27 @@ class Settings(BaseSettings):
     #: hand. Not persisted either way; this is the only source of truth at boot.
     line_open_on_start: bool = True
 
-    #: Spoken to anyone who calls while the line is closed. Tells them when to
+    #: Played to anyone who calls while the line is closed. Tells them when to
     #: try again rather than leaving them with a busy signal they will read as
     #: a broken number.
+    closed_line_audio_url: str = ""
     closed_line_message: str = (
         "Thanks for calling. We are not taking calls right now. "
         "Please try again during the next live show."
     )
 
-    #: Spoken to anyone still holding when an operator clears the queue. They
+    #: Played to a caller an operator decides not to put on air. Without this
+    #: a rejected caller hears nothing at all and holds until they give up --
+    #: invisible on the dashboard, and still being billed.
+    reject_audio_url: str = ""
+    reject_message: str = (
+        "Thanks for calling. We are not able to take you on air this time. "
+        "Please do try us again on the next show."
+    )
+
+    #: Played to anyone still holding when an operator closes the line. They
     #: have been waiting to get on air, so they are told rather than dropped.
+    closing_audio_url: str = ""
     closing_message: str = (
         "Thanks for calling. The show has ended for tonight, so we are closing the line. "
         "Please call back next time."
@@ -103,9 +139,14 @@ class Settings(BaseSettings):
     #: recovered. Needs the REST credentials above; skipped silently without.
     reconcile_on_startup: bool = True
 
-    #: Where an accepted call is bridged to. A real deployment would look this
-    #: up per operator rather than using one station number.
-    agent_forward_number: str = "+15550000000"
+    #: The host's phone. Accepting a caller dials this number and bridges
+    #: them to it. One number by design -- there is one host and one on-air
+    #: slot -- which is why this is a setting and not a lookup.
+    #:
+    #: The default is an obviously-fake placeholder rather than a blank,
+    #: because a blank <Dial> is a TwiML error the caller hears. The lifespan
+    #: refuses to start on it outside local.
+    host_phone_number: str = "+15550000000"
 
     # --- Call history ------------------------------------------------------
     #: Finished calls kept in memory, and the default page size of the history
@@ -139,13 +180,60 @@ class Settings(BaseSettings):
             return "ws://" + base[len("http://") :]
         return base
 
+    def _audio_url(self, configured: str, bundled: str = "") -> str:
+        """Absolute URL for something the caller will hear.
+
+        Accepts either an absolute URL or a bare filename served from this
+        backend's static directory. The second form is the one that matters in
+        development: PUBLIC_BASE_URL is a tunnel hostname that rotates, and
+        .env does not interpolate, so an absolute URL pasted in there goes
+        stale every time the tunnel restarts. A filename is rebuilt against
+        the current base on every request.
+        """
+        target = configured.strip() or bundled
+        if not target:
+            return ""
+        if "://" in target:
+            return target
+        return f"{self.public_base_url.rstrip('/')}/static/{target.lstrip('/')}"
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def resolved_greeting_url(self) -> str:
-        """Configured greeting, else the placeholder served by this backend."""
-        if self.greeting_audio_url:
-            return self.greeting_audio_url
-        return f"{self.public_base_url.rstrip('/')}/static/greeting.mp3"
+        """Configured greeting, else the recording bundled with this backend.
+
+        Falls back to the bundled recording only when it is actually on disk.
+        If someone removes it, this returns "" and the greeting is spoken from
+        ``greeting_message`` instead -- a synthesised prompt is a far better
+        failure than <Play> pointing at a 404, which is dead air.
+        """
+        if not self.greeting_audio_url and (_STATIC_DIR / "greeting.mp3").is_file():
+            return self._audio_url("", "greeting.mp3")
+        return self._audio_url(self.greeting_audio_url)
+
+    @property
+    def resolved_reject_audio_url(self) -> str:
+        return self._audio_url(self.reject_audio_url)
+
+    @property
+    def resolved_closed_line_audio_url(self) -> str:
+        return self._audio_url(self.closed_line_audio_url)
+
+    @property
+    def resolved_closing_audio_url(self) -> str:
+        return self._audio_url(self.closing_audio_url)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def resolved_hold_music_url(self) -> str:
+        """Configured hold music, or nothing.
+
+        Deliberately has no bundled default, which is where it differs from
+        the greeting: with nothing set, <Enqueue> omits waitUrl entirely and
+        Twilio plays its own classical playlist. Falling back to a file that
+        might not exist would turn pleasant default music into a failed fetch.
+        """
+        return self._audio_url(self.hold_music_url)
 
 
 @lru_cache(maxsize=1)

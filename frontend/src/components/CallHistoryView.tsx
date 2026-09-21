@@ -95,6 +95,17 @@ function HistoryRow({ call }: { call: Call }) {
       <td>
         <span className={`status status--${call.status}`}>{statusLabel(call.status)}</span>
         {duration !== null && <span className="history__duration">{formatDuration(duration)}</span>}
+        {/* `ended` is where every finished call lands, so on its own it cannot
+            say whether this one made it on air. */}
+        {call.wasAccepted && (
+          <span
+            className={`history__on-air${call.onAirSeconds === null ? ' history__on-air--missed' : ''}`}
+          >
+            {call.onAirSeconds === null
+              ? 'never connected'
+              : `on air ${formatDuration(call.onAirSeconds)}`}
+          </span>
+        )}
       </td>
 
       <td className="history__transcript">

@@ -7,11 +7,18 @@ outbound audio all assumed Twilio -- so "multi-provider" was true of one file
 out of four and false everywhere it mattered. Supporting a second provider is
 a real project; pretending to support one is worse than not.
 
-Three documents:
+Four documents:
 
     answer_and_gather()  greet, then listen for why they are calling
     hold()               park them while an operator reads the transcript
-    say_and_hangup()     turn someone away with a reason
+    speak_and_hangup()   turn someone away with a reason
+    dial()               put an accepted caller through to a human
+    hang_up()            end a leg we have no further plans for
+
+Anything the caller *hears* goes through :func:`voice`, which plays a
+recording when one is configured and falls back to Twilio's text-to-speech
+otherwise. Every prompt in this service works that way, so a deployment can
+ship with nothing recorded and still say something sensible.
 
 Built with ElementTree rather than f-strings: caller-supplied values end up in
 these documents, and string-built XML is an injection waiting to happen.
@@ -34,10 +41,34 @@ def _document(response: Element) -> RenderedResponse:
     return RenderedResponse(body=f'<?xml version="1.0" encoding="UTF-8"?>{xml}')
 
 
+def voice(parent: Element, *, audio_url: str = "", text: str = "", tts_voice: str) -> None:
+    """Append whatever this moment should sound like to ``parent``.
+
+    A recording wins over words: audio is the whole reason a show has its own
+    sound, and a synthesised voice in the middle of a produced podcast is a
+    seam the audience hears. The text is the safety net, so a fresh deployment
+    with nothing recorded still speaks rather than leaving dead air.
+
+    Adds nothing at all when both are empty. That is a real case -- hold music
+    is allowed to be absent so Twilio plays its own -- and an empty <Say> is
+    worse than no element.
+
+    ``text`` is built into the document, never interpolated: it is
+    configuration someone edits under time pressure, and an apostrophe or an
+    angle bracket must not be able to produce a different document.
+    """
+    if audio_url:
+        SubElement(parent, "Play").text = audio_url
+    elif text:
+        SubElement(parent, "Say", {"voice": tts_voice}).text = text
+
+
 def answer_and_gather(
     *,
-    greeting_url: str,
     action_url: str,
+    tts_voice: str,
+    greeting_audio_url: str = "",
+    greeting_text: str = "",
     speech_model: str = "phone_call",
     language: str = "en-US",
     speech_timeout_seconds: int = 3,
@@ -89,7 +120,7 @@ def answer_and_gather(
             "actionOnEmptyResult": "true",
         },
     )
-    SubElement(gather, "Play").text = greeting_url
+    voice(gather, audio_url=greeting_audio_url, text=greeting_text, tts_voice=tts_voice)
 
     redirect = SubElement(response, "Redirect", {"method": "POST"})
     redirect.text = action_url
@@ -129,25 +160,53 @@ def hold(queue_name: str, action_url: str, wait_url: str = "") -> RenderedRespon
 
 
 
-def say_and_hangup(message: str, voice: str = "Polly.Joanna") -> RenderedResponse:
+def speak_and_hangup(*, audio_url: str = "", text: str = "", tts_voice: str) -> RenderedResponse:
     """Say one thing, then end the call.
 
-    Used at both ends of a show: turning away a caller who dialled after the
-    line closed, and clearing anyone still holding when it does. Both are
-    deliberately spoken rather than a bare ``<Hangup>`` or a ``<Reject>``
-    busy signal -- a listener who gets silence assumes the number is broken
-    and calls back, which is worse for them and for us.
+    Used wherever a caller is turned away: after the line closes, when the
+    queue is cleared, and when an operator rejects someone. All three are
+    deliberately spoken rather than a bare ``<Hangup>`` or a ``<Reject>`` busy
+    signal -- a listener who gets silence assumes the number is broken and
+    calls back, which is worse for them and for us.
 
-    The cost of that choice: ``<Say>`` answers the call, so these seconds are
+    The cost of that choice: answering the call means these seconds are
     billed, where ``<Reject>`` would not be. A few seconds per turned-away
     caller is the right trade for a show whose callers are its audience.
-
-    ``message`` is configuration and is *built* into the document, never
-    interpolated -- an apostrophe or an angle bracket in a message someone
-    edits at 2am must not be able to produce a different document.
     """
     response = Element("Response")
-    say = SubElement(response, "Say", {"voice": voice})
-    say.text = message
+    voice(response, audio_url=audio_url, text=text, tts_voice=tts_voice)
+    SubElement(response, "Hangup")
+    return _document(response)
+
+
+def dial(destination: str, *, action_url: str = "") -> RenderedResponse:
+    """Put an accepted caller through to the host.
+
+    Sent to a call that is already up, via the REST API, which pulls them out
+    of the hold queue and into the dial leg.
+
+    ``action`` is the only way to find out how that went. Twilio requests it
+    when the dial ends -- whether the two of them talked and hung up, or the
+    host's line was busy because they are already on air with someone else --
+    and passes ``DialCallStatus``. Without it a call marked ACCEPTED sits on
+    the dashboard as though it were live, with no way to tell a conversation
+    in progress from one that never connected.
+    """
+    response = Element("Response")
+    attributes = {"action": action_url, "method": "POST"} if action_url else {}
+    SubElement(response, "Dial", attributes).text = destination
+    return _document(response)
+
+
+def hang_up() -> RenderedResponse:
+    """End the call, explicitly.
+
+    Twilio also ends a call that simply runs out of verbs, so an empty
+    ``<Response/>`` would do the same thing -- but only as a side effect. This
+    is used where hanging up is the *point*: after a ``<Dial>`` with an
+    ``action`` URL, where the caller's leg is deliberately kept alive and
+    handed back to us, and would otherwise sit connected to silence.
+    """
+    response = Element("Response")
     SubElement(response, "Hangup")
     return _document(response)

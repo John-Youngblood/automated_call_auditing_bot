@@ -67,7 +67,8 @@ them.
 | 1 | `POST /webhook/incoming-call` | `<Gather input="speech">` with the greeting nested inside | the greeting, then silence while Twilio listens |
 | 2 | `POST /webhook/speech-result` | `<Enqueue>` | hold music |
 | 3 | `POST /webhook/queue-exit` | empty `<Response/>` | (they left the queue) |
-| 4 | `POST /webhook/call-status` | `204` | (call is over) |
+| 4 | `POST /webhook/dial-complete` | empty `<Response/>` | (their time with the host ended) |
+| 5 | `POST /webhook/call-status` | `204` | (call is over) |
 
 Four details that matter:
 
@@ -87,6 +88,16 @@ Four details that matter:
 - **`<Enqueue action>` is how abandonment is detected.** Nothing keeps a
   connection to this service while a caller holds, so without it a caller who
   gives up leaves no trace. Twilio posts `QueueResult=hangup` and `QueueTime`.
+- **`<Dial action>` is how the on-air outcome is detected.** It fires the
+  moment the bridge ends, with `DialCallStatus` — `completed` if they talked,
+  `busy` if the host was already on a call and this caller never got through.
+  Either way the call is marked `ended`: `accepted` means *on air right now*,
+  so it has to stop saying that once the call is over.
+- **That handler must hang up, explicitly.** Adding an `action` URL changes
+  what `<Dial>` does when it finishes — instead of ending the call, Twilio
+  keeps the **caller's** leg alive and hands control back. So when the host
+  hangs up first, that caller is still connected and listening to nothing
+  until we return `<Hangup/>`.
 
 ## Layout
 
@@ -125,6 +136,34 @@ Four details that matter:
     │   └── useCallHistory.ts     # history is a plain HTTP read
     └── types/events.ts       # mirrors backend/app/schemas/events.py
 ```
+
+## What the caller hears
+
+Six moments, each an **audio file with a text fallback**. A recording wins when
+one is configured; otherwise Twilio speaks the text in `TTS_VOICE`. So a fresh
+deployment says something sensible with nothing recorded, and you can replace
+each line with real audio one at a time.
+
+| # | Moment | Audio | Spoken fallback |
+|---|---|---|---|
+| 1 | Greeting — *also the prompt* | `GREETING_AUDIO_URL`, else bundled `greeting.mp3` | `GREETING_MESSAGE` |
+| 2 | Hold music | `HOLD_MUSIC_URL` | — *(Twilio's playlist)* |
+| 3 | Rejected | `REJECT_AUDIO_URL` | `REJECT_MESSAGE` |
+| 4 | Line closed | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE` |
+| 5 | Closing the line | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE` |
+| 6 | Accepted | — *(dialled to `HOST_PHONE_NUMBER`)* | — |
+
+Hold music is the one with no text fallback, because it is music: blank means
+Twilio's own classical playlist, which beats a robot voice on a loop.
+
+Audio settings take **an absolute URL or a bare filename** served from
+`backend/app/static/`. The filename form is what you want in development —
+`PUBLIC_BASE_URL` is a tunnel hostname that rotates and `.env` cannot
+interpolate it, so a pasted absolute URL goes stale on every restart. In
+production use a CDN so Twilio is not pulling audio through your API.
+
+`TTS_VOICE` is one setting for the whole service, not one per prompt: a show
+that speaks in two different synthetic voices sounds broken rather than varied.
 
 ## Call history
 
@@ -304,7 +343,7 @@ so a second worker would see a different set of calls. See
 
 | Area | State |
 | --- | --- |
-| Accept / Reject | State changes and broadcasts are real; both Twilio REST commands (bridge, decline) are logged stubs in [provider_client.py](backend/app/telephony/provider_client.py), so Accept does not yet put anyone on air |
 | Caller names | Requires Caller ID Lookup enabled on the number (paid, off by default). Without it every caller is a bare number |
+| Fallback URL | No `voiceFallbackUrl` configured, so a caller who arrives while this service is down hears Twilio's generic error |
 | Auth | No login on the dashboard and no authorisation on the API — including `POST /api/line/close`, which takes the show off air and hangs up on every live caller |
 | Providers | Twilio only. `<Gather input="speech">` has no direct equivalent elsewhere, so another provider means a real port, not a config change |

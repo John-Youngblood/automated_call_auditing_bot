@@ -82,6 +82,19 @@ class Call(CamelModel):
     #: to make a decision from.
     transcript_confidence: float | None = None
 
+    #: True once an operator pressed Accept. Survives the call ending, which
+    #: ACCEPTED does not -- that status means "on air right now" and is
+    #: replaced by ENDED when the bridge finishes. Without this, history could
+    #: not tell a caller who made it on air from one who hung up while being
+    #: screened: both end up ENDED.
+    was_accepted: bool = False
+
+    #: Seconds the caller actually spent talking to the host, from Twilio's
+    #: DialCallDuration. None alongside ``was_accepted`` is meaningful rather
+    #: than missing: it says the bridge never connected -- the usual cause
+    #: being the host already on air with someone else.
+    on_air_seconds: int | None = None
+
     #: True when this call was rebuilt from Twilio at startup rather than seen
     #: arrive. Such a call is genuinely on hold, but its transcript died with
     #: the previous process -- so the dashboard has to say so rather than

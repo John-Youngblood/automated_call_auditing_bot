@@ -885,6 +885,22 @@ h2 {
   opacity: 0.75;
 }
 
+/* Whether a finished call actually made it on air, and for how long. */
+.history__on-air {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--success);
+}
+
+/* Accepted but the bridge never connected -- the host was most likely already
+   on a call. Worth looking different from a conversation that happened. */
+.history__on-air--missed {
+  color: var(--warning);
+}
+
 /* ---------------------------------------------------------------- toasts -- */
 /* Bottom-right and out of the way of the queue, which is what an operator is
    actually reading. Fixed rather than in flow: a confirmation must not push

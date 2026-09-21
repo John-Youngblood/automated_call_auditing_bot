@@ -28,11 +28,13 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from app.api.deps import BroadcasterDep, LineDep, RegistryDep
+from app.api.deps import BroadcasterDep, LineDep, RegistryDep, SettingsDep
+from app.config import Settings
 from app.schemas.calls import CallStatus
 from app.schemas.events import ClientCommand, ClientCommandType, ServerEvent
 from app.services.broadcaster import CLOSE_SENTINEL, Subscriber
 from app.services.call_registry import CallRegistry
+from app.services.decisions import TelephonyUnavailable, put_on_air, turn_away
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ async def frontend_stream(
     broadcaster: BroadcasterDep,
     registry: RegistryDep,
     line: LineDep,
+    settings: SettingsDep,
 ) -> None:
     await websocket.accept()
 
@@ -53,7 +56,9 @@ async def frontend_stream(
         # mid-call shows an empty queue until the next event happens to fire.
         await websocket.send_json(registry.snapshot_event(line.is_open).to_wire())
 
-        reader = asyncio.create_task(_read_commands(websocket, registry), name="dash-reader")
+        reader = asyncio.create_task(
+            _read_commands(websocket, registry, settings), name="dash-reader"
+        )
         writer = asyncio.create_task(_write_events(websocket, subscriber), name="dash-writer")
 
         done, pending = await asyncio.wait({reader, writer}, return_when=asyncio.FIRST_COMPLETED)
@@ -83,7 +88,9 @@ async def _write_events(websocket: WebSocket, subscriber: Subscriber) -> None:
         await websocket.send_json(payload)
 
 
-async def _read_commands(websocket: WebSocket, registry: CallRegistry) -> None:
+async def _read_commands(
+    websocket: WebSocket, registry: CallRegistry, settings: Settings
+) -> None:
     """Handle inbound dashboard commands.
 
     Also the connection's liveness detector -- ``receive_json`` raising
@@ -106,10 +113,15 @@ async def _read_commands(websocket: WebSocket, registry: CallRegistry) -> None:
             )
             continue
 
-        await _dispatch(command, websocket, registry)
+        await _dispatch(command, websocket, registry, settings)
 
 
-async def _dispatch(command: ClientCommand, websocket: WebSocket, registry: CallRegistry) -> None:
+async def _dispatch(
+    command: ClientCommand,
+    websocket: WebSocket,
+    registry: CallRegistry,
+    settings: Settings,
+) -> None:
     match command.type:
         case ClientCommandType.PING:
             # Application-level heartbeat. Uvicorn also sends protocol pings,
@@ -122,18 +134,40 @@ async def _dispatch(command: ClientCommand, websocket: WebSocket, registry: Call
                 await websocket.send_json(ServerEvent.error("callId is required").to_wire())
                 return
             accepting = command.type is ClientCommandType.ACCEPT_CALL
-            try:
-                registry.set_status(
-                    command.call_id,
-                    CallStatus.ACCEPTED if accepting else CallStatus.REJECTED,
-                )
-            except KeyError:
+            call = registry.get(command.call_id)
+            if call is None:
                 await websocket.send_json(
                     ServerEvent.error("unknown call", call_id=command.call_id).to_wire()
                 )
                 return
-            # TODO: the provider-side half of the decision -- see
-            # app/api/routes/calls.py, which holds the same placeholder.
-            logger.info(
-                "dashboard %s call_id=%s", "accepted" if accepting else "rejected", command.call_id
+
+            # Twilio first, local state second -- the same ordering the HTTP
+            # routes use. This branch used to skip the carrier entirely, so a
+            # reject over the socket left the caller holding while the
+            # dashboard filed them as resolved.
+            try:
+                if accepting:
+                    delivered = await put_on_air(
+                        call.call_id, settings.host_phone_number, settings
+                    )
+                else:
+                    delivered = await turn_away(call.call_id, settings)
+            except TelephonyUnavailable as exc:
+                await websocket.send_json(
+                    ServerEvent.error(str(exc), call_id=command.call_id).to_wire()
+                )
+                return
+
+            if not delivered:
+                await websocket.send_json(
+                    ServerEvent.error(
+                        "could not reach the caller at Twilio; they may still be holding",
+                        call_id=command.call_id,
+                    ).to_wire()
+                )
+                return
+
+            registry.set_status(
+                command.call_id,
+                CallStatus.ACCEPTED if accepting else CallStatus.REJECTED,
             )

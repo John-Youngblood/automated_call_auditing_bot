@@ -166,6 +166,32 @@ you already had. If that becomes the thing people want, the split is cheap to
 restore — `drain.py` never merged into `line_state.py`, and the endpoint calls
 them in sequence rather than one implying the other.
 
+### Every decision reaches the caller
+
+`services/decisions.py` holds accept and reject. Both were logging stubs until
+recently, and reject was the dangerous one: marking a call REJECTED takes it
+out of `open_calls`, so it left the dashboard, while nothing reached Twilio and
+the caller stayed in the hold queue listening to music. Stranded *and*
+invisible — not in the queue, not cleared by closing the line (which only walks
+open calls), still billed, still holding a slot against Twilio's 1000-call cap.
+
+Accept had the same shape but fails loudly: nobody comes on air and you notice
+in seconds. Reject looked completely fine on the dashboard, which is why it is
+the one worth writing down.
+
+Three rules they share with `drain.py`:
+
+1. **The carrier acts first, local state follows.** A decision we could not
+   deliver leaves the call where it was, so the dashboard is never more
+   optimistic than the phone line.
+2. **No credentials is an error, not a success.** The placeholder client used
+   to log the command and return True, which made both decisions look like they
+   worked anywhere. A screening dashboard whose whole job is showing what the
+   caller is experiencing cannot afford that.
+3. **Accept is strict about a 404, reject is lenient.** A vanished call means
+   nobody is being put on air (failure), but it also means nobody is still
+   holding (success). Same status code, opposite meanings.
+
 ### The two ends of the same problem
 
 Twilio holds a caller forever and never tells us. Two features exist because of

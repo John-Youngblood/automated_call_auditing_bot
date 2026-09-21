@@ -57,6 +57,19 @@ export interface Call {
   /** Twilio's confidence in that transcription, 0-1. */
   transcriptConfidence: number | null;
   /**
+   * True once an operator pressed Accept. Survives the call ending, which
+   * `accepted` does not — that status means "on air right now" and becomes
+   * `ended` when the bridge finishes. Without this, history could not tell a
+   * caller who made it on air from one who hung up during screening.
+   */
+  wasAccepted: boolean;
+  /**
+   * Seconds spent talking to the host. `null` alongside `wasAccepted` is
+   * meaningful rather than missing: the bridge never connected, usually
+   * because the host was already on a call.
+   */
+  onAirSeconds: number | null;
+  /**
    * True when the backend rebuilt this call from Twilio after a restart. The
    * caller is really on hold, but their transcript died with the previous
    * process — so the UI must say so rather than render the same empty state

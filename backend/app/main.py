@@ -27,9 +27,13 @@ from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.line_state import LineState
 from app.services.reconcile import reconcile_hold_queue
-from app.telephony.provider_client import create_telephony_client
+from app.telephony.rest import client_from_settings
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+#: The shipped default for HOST_PHONE_NUMBER. Reaching production with this
+#: still set is a configuration failure, not a preference.
+PLACEHOLDER_HOST_NUMBER = "+15550000000"
 
 
 def configure_logging(level: str) -> None:
@@ -54,8 +58,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     log = logging.getLogger(__name__)
 
-    app.state.telephony = create_telephony_client(settings)
-
     broadcaster = Broadcaster(queue_max=settings.frontend_queue_max)
     app.state.broadcaster = broadcaster
     app.state.registry = CallRegistry(
@@ -70,15 +72,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.public_base_url,
         "open" if app.state.line.is_open else "CLOSED",
     )
-    if app.state.telephony.is_placeholder:
+    if client_from_settings(settings) is None:
         log.warning(
-            "telephony REST client is a PLACEHOLDER -- accept/reject will not "
-            "actually control calls at the carrier"
+            "no Twilio REST credentials -- accept, reject and closing the line "
+            "will fail until TWILIO_ACCOUNT_SID and an API key are set"
         )
     if settings.app_env != "local" and not settings.validate_webhook_signature:
         log.warning(
             "VALIDATE_WEBHOOK_SIGNATURE is off outside local -- the call webhook is spoofable"
         )
+
+    # A misconfigured host number is silent in the worst way: Accept succeeds,
+    # the dashboard says the caller is on air, and Twilio dials a number that
+    # goes nowhere. Refuse to start rather than discover it mid-show.
+    if settings.host_phone_number == PLACEHOLDER_HOST_NUMBER:
+        message = (
+            f"HOST_PHONE_NUMBER is still the placeholder {PLACEHOLDER_HOST_NUMBER}. "
+            "Accepted callers would be dialled to nowhere while the dashboard "
+            "showed them on air."
+        )
+        if settings.app_env == "local":
+            log.warning("%s Fine locally; this refuses to start anywhere else.", message)
+        else:
+            raise RuntimeError(message)
 
     # Deliberately a background task, not an await. Uvicorn does not accept
     # connections until lifespan startup returns, so blocking here on a slow

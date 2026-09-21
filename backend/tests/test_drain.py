@@ -13,7 +13,7 @@ from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.drain import hang_up_holders
 from app.telephony.rest import TwilioRestClient
-from app.telephony.twiml import say_and_hangup
+from app.telephony.twiml import speak_and_hangup
 
 ACCOUNT = "AC" + "0" * 32
 
@@ -83,13 +83,17 @@ def twilio_stub(*, reject: set[str] | None = None, statuses: dict[str, str] | No
 
 class TestGoodbyeTwiml:
     def test_says_then_hangs_up(self) -> None:
-        doc = fromstring(say_and_hangup("The show has ended.").body)
+        doc = fromstring(
+            speak_and_hangup(text="The show has ended.", tts_voice="Polly.Joanna").body
+        )
         assert [child.tag for child in doc] == ["Say", "Hangup"]
         assert doc.find("Say").text == "The show has ended."
 
     def test_the_message_cannot_break_out_of_the_xml(self) -> None:
         """The message is configuration, so it is built, not interpolated."""
-        doc = fromstring(say_and_hangup("Bye</Say><Dial>+15559999999</Dial><Say>").body)
+        doc = fromstring(speak_and_hangup(
+            text="Bye</Say><Dial>+15559999999</Dial><Say>", tts_voice="Polly.Joanna"
+        ).body)
         assert [child.tag for child in doc] == ["Say", "Hangup"]
         assert doc.find("Dial") is None
 
@@ -163,3 +167,39 @@ async def test_missing_credentials_report_failure_not_success() -> None:
     assert result.ended == []
     assert sorted(result.failed) == ["CA1", "CA2"]
     assert len(reg.open_calls()) == 2
+
+
+async def test_bad_credentials_are_not_reported_as_hung_up(patch_transport) -> None:
+    """The failure mode this guards: Twilio 401s the hang-up, and the probe
+    that follows 401s too. Not knowing is not the same as success -- treating
+    it as one leaves a real person connected while the dashboard says they
+    were let go. Found for real when the suite picked up a developer's .env
+    and started talking to api.twilio.com unauthenticated."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="authenticate")
+
+    patch_transport(httpx.MockTransport(handler))
+    reg = registry_with("CA1")
+
+    result = await hang_up_holders(reg, settings())
+
+    assert result.ended == []
+    assert result.failed == ["CA1"]
+    assert [c.call_id for c in reg.open_calls()] == ["CA1"]
+
+
+async def test_a_404_on_the_hangup_still_counts_as_gone(patch_transport) -> None:
+    """The case the above must not break: Twilio saying the call does not
+    exist is positive confirmation that nobody is holding."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={})
+
+    patch_transport(httpx.MockTransport(handler))
+    reg = registry_with("CA1")
+
+    result = await hang_up_holders(reg, settings())
+
+    assert result.ended == ["CA1"]
+    assert result.failed == []

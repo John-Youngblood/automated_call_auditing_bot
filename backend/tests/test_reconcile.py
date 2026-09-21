@@ -16,8 +16,8 @@ import pytest
 from app.config import Settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
-from app.services.reconcile import reconcile_hold_queue, rest_client
-from app.telephony.rest import TwilioRestClient
+from app.services.reconcile import reconcile_hold_queue
+from app.telephony.rest import TwilioRestClient, client_from_settings
 
 ACCOUNT = "AC00000000000000000000000000000000"
 QUEUE_SID = "QU00000000000000000000000000000000"
@@ -210,16 +210,16 @@ async def test_missing_credentials_skip_silently() -> None:
 
 class TestCredentialSelection:
     def test_api_key_is_preferred(self) -> None:
-        client = rest_client(settings())
+        client = client_from_settings(settings())
         assert client is not None
         assert client._auth[0].startswith("SK")  # noqa: SLF001
 
     def test_auth_token_is_the_fallback(self) -> None:
-        client = rest_client(
+        client = client_from_settings(
             settings(twilio_api_key_sid="", twilio_api_key_secret="", twilio_auth_token="tok")
         )
         assert client is not None
         assert client._auth == (ACCOUNT, "tok")  # noqa: SLF001
 
     def test_no_credentials_at_all(self) -> None:
-        assert rest_client(Settings(_env_file=None)) is None
+        assert client_from_settings(Settings(_env_file=None)) is None

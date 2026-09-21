@@ -8,8 +8,10 @@ asking what Twilio currently knows, and telling it to change a live call.
     GET  /Calls/{sid}.json                   who that caller actually is
     POST /Calls/{sid}.json                   send a live call new instructions
 
-The reads serve startup reconciliation; the write serves closing the line at
-the end of a show. See app/services/reconcile.py and app/services/drain.py.
+The reads serve startup reconciliation. The write is every decision that
+reaches the caller: putting them on air, turning them down, and clearing the
+queue. See app/services/reconcile.py, app/services/decisions.py and
+app/services/drain.py.
 
 Deliberately hand-rolled on ``httpx`` rather than ``twilio-python``: we need
 four endpoints, the official SDK is synchronous (requests-based, no asyncio
@@ -26,9 +28,14 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+from app.config import Settings
+
 logger = logging.getLogger(__name__)
 
 API_ROOT = "https://api.twilio.com/2010-04-01"
+
+#: Twilio call statuses that mean the caller is still on the line.
+LIVE_CALL_STATUSES = frozenset({"in-progress", "ringing", "queued"})
 
 #: Pages of queue members to walk before giving up. Twilio caps a queue at
 #: 5000 and pages at 50, so this covers a full queue with room to spare while
@@ -96,24 +103,23 @@ class TwilioRestClient:
     async def __aexit__(self, *exc: object) -> None:
         await self._client.aclose()
 
-    async def _request(
+    async def _send(
         self, method: str, path: str, data: dict[str, str] | None = None
-    ) -> dict | None:
-        """One request. Returns ``None`` for anything that is not a usable 2xx.
+    ) -> tuple[int | None, dict | None]:
+        """One request, returning ``(status_code, payload)``.
 
-        Swallows rather than raises: every caller is best-effort, where the
-        right response to Twilio being unavailable is to log it and report the
-        failure upwards rather than turn it into a 500.
+        The status code is kept because callers need to tell a 404 -- the call
+        is already gone -- apart from a 401 or a timeout, where we simply do
+        not know. Collapsing both to ``None`` is how a revoked credential
+        could be reported as a successful hang-up.
         """
         url = path if path.startswith("http") else f"{API_ROOT}/Accounts/{self._account_sid}{path}"
         try:
             response = await self._client.request(method, url, data=data)
         except httpx.HTTPError as exc:
             logger.warning("twilio %s %s failed: %s", method, path, exc)
-            return None
+            return None, None
 
-        if response.status_code == httpx.codes.NOT_FOUND:
-            return None
         if response.is_error:
             # 401 here is the common one and worth naming: it means the REST
             # credentials are wrong, which is a different problem from Twilio
@@ -125,8 +131,14 @@ class TwilioRestClient:
                 response.status_code,
                 response.text[:200],
             )
-            return None
-        return response.json()
+            return response.status_code, None
+        return response.status_code, response.json()
+
+    async def _request(
+        self, method: str, path: str, data: dict[str, str] | None = None
+    ) -> dict | None:
+        """``_send`` for callers that only care whether they got a payload."""
+        return (await self._send(method, path, data))[1]
 
     async def _get(self, path: str) -> dict | None:
         return await self._request("GET", path)
@@ -213,13 +225,56 @@ class TwilioRestClient:
 
         A 404 counts as success. It means the call is already gone, and the
         goal here is "this caller is no longer holding", which is satisfied.
+
+        Anything else that fails is reported as a failure even if the follow-up
+        probe also fails. Not knowing is not the same as success, and this is
+        the one place where guessing wrong leaves a real person connected to a
+        line nobody is watching while the dashboard says they were hung up.
         """
-        payload = await self._request("POST", f"/Calls/{call_sid}.json", data={"Twiml": twiml})
-        if payload is not None:
+        status, _ = await self._send("POST", f"/Calls/{call_sid}.json", data={"Twiml": twiml})
+        if status is not None and status < httpx.codes.BAD_REQUEST:
+            return True
+        if status == httpx.codes.NOT_FOUND:
             return True
 
-        # _request already logged the reason. Distinguish "already ended" from
-        # a real failure so the operator is not told a hang-up failed when the
-        # caller had simply hung up first.
+        # Only Twilio positively telling us the call is over counts. A probe
+        # that itself fails (401, timeout) leaves us knowing nothing.
         probe = await self.fetch_call(call_sid)
-        return probe is None or probe.status not in {"in-progress", "ringing", "queued"}
+        return probe is not None and probe.status not in LIVE_CALL_STATUSES
+
+    async def send_twiml(self, call_sid: str, twiml: str) -> bool:
+        """Replace a live call's instructions. Strict about success.
+
+        Used for putting a caller on air, where a 404 is a *failure*: the call
+        is gone, so nobody is being connected, and reporting otherwise would
+        show an operator a caller on air who hung up thirty seconds ago.
+        :meth:`end_call` is the lenient variant for the opposite case.
+        """
+        status, _ = await self._send("POST", f"/Calls/{call_sid}.json", data={"Twiml": twiml})
+        return status is not None and status < httpx.codes.BAD_REQUEST
+
+
+def client_from_settings(settings: Settings) -> TwilioRestClient | None:
+    """Build a client, or ``None`` when credentials are not configured.
+
+    An API key is preferred because it can be revoked without touching the
+    auth token that webhook signature verification depends on. Returning
+    ``None`` rather than raising lets each caller decide what unconfigured
+    means for it: reconciliation skips, a screening decision fails loudly.
+    """
+    if not settings.twilio_account_sid:
+        return None
+
+    if settings.twilio_api_key_sid and settings.twilio_api_key_secret:
+        username, password = settings.twilio_api_key_sid, settings.twilio_api_key_secret
+    elif settings.twilio_auth_token:
+        username, password = settings.twilio_account_sid, settings.twilio_auth_token
+    else:
+        return None
+
+    return TwilioRestClient(
+        account_sid=settings.twilio_account_sid,
+        username=username,
+        password=password,
+        timeout_seconds=settings.twilio_api_timeout_seconds,
+    )

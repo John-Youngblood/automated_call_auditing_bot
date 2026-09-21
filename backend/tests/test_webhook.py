@@ -322,13 +322,34 @@ class TestHoldMusic:
         )
         return fromstring(response.text).find("Enqueue")
 
-    def test_configured_music_is_played(self, make_client) -> None:
+    def test_an_absolute_url_is_used_as_given(self, make_client) -> None:
         client = make_client(HOLD_MUSIC_URL="https://cdn.example.test/hold.mp3")
         with client:
             enqueue = self.hold_twiml(client)
 
         assert enqueue is not None
         assert enqueue.attrib["waitUrl"] == "https://cdn.example.test/hold.mp3"
+
+    def test_a_bare_filename_is_served_from_this_backend(self, make_client) -> None:
+        """The form that survives a rotating tunnel: .env cannot interpolate
+        PUBLIC_BASE_URL, so a filename is rebuilt against the current base."""
+        client = make_client(HOLD_MUSIC_URL="h3_podcast_theme.mp3")
+        with client:
+            enqueue = self.hold_twiml(client)
+
+        assert enqueue is not None
+        assert (
+            enqueue.attrib["waitUrl"]
+            == "https://calls.example.test/static/h3_podcast_theme.mp3"
+        )
+
+    def test_a_leading_slash_does_not_double_up(self, make_client) -> None:
+        client = make_client(HOLD_MUSIC_URL="/theme.mp3")
+        with client:
+            enqueue = self.hold_twiml(client)
+
+        assert enqueue is not None
+        assert enqueue.attrib["waitUrl"] == "https://calls.example.test/static/theme.mp3"
 
     def test_wait_url_is_fetched_with_get(self, make_client) -> None:
         """Twilio only caches a static audio file when it GETs it. Left as the
@@ -342,3 +363,25 @@ class TestHoldMusic:
         assert enqueue.attrib["waitUrlMethod"] == "GET"
         # The action URL is unaffected -- it is our webhook, not an audio file.
         assert enqueue.attrib["method"] == "POST"
+
+
+class TestGreetingResolution:
+    """The greeting resolves the same way, with one difference: it always
+    produces a URL, because a call with no greeting is a caller in silence."""
+
+    def greeting_url(self, client: TestClient) -> str:
+        response = client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        return fromstring(response.text).find("Gather/Play").text
+
+    def test_unset_falls_back_to_the_bundled_recording(self, client: TestClient) -> None:
+        assert self.greeting_url(client) == "https://calls.example.test/static/greeting.mp3"
+
+    def test_an_absolute_url_is_used_as_given(self, make_client) -> None:
+        client = make_client(GREETING_AUDIO_URL="https://cdn.example.test/hi.mp3")
+        with client:
+            assert self.greeting_url(client) == "https://cdn.example.test/hi.mp3"
+
+    def test_a_bare_filename_is_served_from_this_backend(self, make_client) -> None:
+        client = make_client(GREETING_AUDIO_URL="intro.mp3")
+        with client:
+            assert self.greeting_url(client) == "https://calls.example.test/static/intro.mp3"

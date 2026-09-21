@@ -14,40 +14,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.telephony.rest import TwilioRestClient
+from tests.conftest import patch_twilio
 
 INCOMING = {"CallSid": "CA-line-1", "From": "+15035551234", "To": "+15039990000"}
-
-TWILIO_CREDENTIALS = {
-    "TWILIO_ACCOUNT_SID": "AC" + "0" * 32,
-    "TWILIO_API_KEY_SID": "SK" + "0" * 32,
-    "TWILIO_API_KEY_SECRET": "secret",
-}
-
-
-@pytest.fixture
-def twilio(monkeypatch: pytest.MonkeyPatch):
-    """A Twilio that accepts every hang-up, so closing can actually clear."""
-    hung_up: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        sid = request.url.path.rsplit("/", 1)[-1].removesuffix(".json")
-        if request.method == "POST":
-            hung_up.append(sid)
-            return httpx.Response(200, json={"sid": sid, "status": "completed"})
-        return httpx.Response(200, json={"sid": sid, "status": "in-progress"})
-
-    transport = httpx.MockTransport(handler)
-    original = TwilioRestClient.__aenter__
-
-    async def entered(self: TwilioRestClient) -> TwilioRestClient:
-        await original(self)
-        self._client = httpx.AsyncClient(transport=transport)  # noqa: SLF001
-        return self
-
-    monkeypatch.setattr(TwilioRestClient, "__aenter__", entered)
-    return hung_up
-
 
 def call_in(client: TestClient, call_sid: str = "CA-line-1"):
     return client.post("/webhook/incoming-call", data={**INCOMING, "CallSid": call_sid})
@@ -108,34 +77,36 @@ class TestClosingClearsTheQueue:
             data={"CallSid": call_sid, "SpeechResult": "A question", "Confidence": "0.9"},
         )
 
-    def test_everyone_holding_is_hung_up(self, make_client, twilio) -> None:
-        client = make_client(**TWILIO_CREDENTIALS)
-        with client:
-            self.hold(client, "CA-a")
-            self.hold(client, "CA-b")
+    def test_everyone_holding_is_hung_up(self, client: TestClient, twilio) -> None:
+        self.hold(client, "CA-a")
+        self.hold(client, "CA-b")
 
-            body = client.post("/api/line/close").json()
+        body = client.post("/api/line/close").json()
 
-            assert body["open"] is False
-            assert sorted(body["endedCallIds"]) == ["CA-a", "CA-b"]
-            assert body["failedCallIds"] == []
-            assert client.get("/api/calls").json() == []
+        assert body["open"] is False
+        assert sorted(body["endedCallIds"]) == ["CA-a", "CA-b"]
+        assert body["failedCallIds"] == []
+        assert client.get("/api/calls").json() == []
         assert sorted(twilio) == ["CA-a", "CA-b"]
 
-    def test_an_empty_queue_closes_cleanly(self, make_client, twilio) -> None:
-        client = make_client(**TWILIO_CREDENTIALS)
-        with client:
-            body = client.post("/api/line/close").json()
+    def test_an_empty_queue_closes_cleanly(self, client: TestClient, twilio) -> None:
+        body = client.post("/api/line/close").json()
 
         assert body["open"] is False
         assert body["endedCallIds"] == []
         assert twilio == []
 
-    def test_a_caller_we_could_not_reach_stays_visible(self, client: TestClient) -> None:
-        """No REST credentials here, so every hang-up fails. The line still
-        closes -- but those callers are still connected, so they keep their
-        place rather than vanishing from a dashboard that has gone quiet."""
+    def test_a_caller_we_could_not_reach_stays_visible(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Twilio refuses the hang-up. The line still closes -- but that
+        caller is still connected, so they keep their place rather than
+        vanishing from a dashboard that has gone quiet."""
         self.hold(client, "CA-stuck")
+        patch_twilio(
+            monkeypatch,
+            httpx.MockTransport(lambda request: httpx.Response(503, text="unavailable")),
+        )
 
         body = client.post("/api/line/close").json()
 

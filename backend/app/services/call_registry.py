@@ -174,6 +174,11 @@ class CallRegistry:
         if call.status is status:
             return call
         call.status = status
+        if status is CallStatus.ACCEPTED:
+            # Sticky, because ACCEPTED is not: it gets replaced by ENDED once
+            # the bridge finishes, and "this caller made it on air" has to
+            # outlive that.
+            call.was_accepted = True
         # A terminal status ends *screening*, so stamp the time here. An
         # accepted call may well continue with a human, but as far as this
         # dashboard is concerned it is done -- without this the queue's
@@ -191,6 +196,19 @@ class CallRegistry:
         self._prune_terminal()
         return call
 
+    def end_on_air(self, call_id: str, seconds: int | None = None) -> Call | None:
+        """Record how long a caller was on air, and mark the call over.
+
+        ``seconds`` is Twilio's DialCallDuration. Leaving it ``None`` is how a
+        bridge that never connected is distinguished from a short one, so it
+        is not defaulted to zero.
+        """
+        call = self._calls.get(call_id)
+        if call is None:
+            return None
+        call.on_air_seconds = seconds
+        return self.set_status(call_id, CallStatus.ENDED)
+
     def end(self, call_id: str) -> Call | None:
         """Mark a call finished. Safe to call more than once."""
         call = self._calls.get(call_id)
@@ -198,9 +216,13 @@ class CallRegistry:
             return None
         if call.ended_at is None:
             call.ended_at = datetime.now(UTC)
-        # A call already resolved by a human keeps that outcome -- the caller
-        # hanging up afterwards is a consequence of the decision, not a new one.
-        if call.status not in (CallStatus.ACCEPTED, CallStatus.REJECTED):
+        # REJECTED survives: we hung up on them, so the call ending afterwards
+        # is a consequence of that decision rather than a new outcome, and
+        # "rejected" is the thing an operator needs to see later.
+        #
+        # ACCEPTED does not. It means "on air right now", so once the call is
+        # over it has to stop saying that -- whichever end hung up first.
+        if call.status is not CallStatus.REJECTED:
             call.status = CallStatus.ENDED
         self._publish(ServerEventType.CALL_ENDED, call)
         self._prune_terminal()

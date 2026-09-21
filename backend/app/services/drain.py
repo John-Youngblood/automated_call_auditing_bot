@@ -31,8 +31,8 @@ from dataclasses import dataclass, field
 from app.config import Settings
 from app.schemas.calls import CallStatus
 from app.services.call_registry import CallRegistry
-from app.services.reconcile import rest_client
-from app.telephony import say_and_hangup
+from app.telephony import speak_and_hangup
+from app.telephony.rest import client_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ async def hang_up_holders(registry: CallRegistry, settings: Settings) -> DrainRe
     if not open_calls:
         return DrainResult()
 
-    client = rest_client(settings)
+    client = client_from_settings(settings)
     if client is None:
         logger.error(
             "cannot hang up holders: no Twilio REST credentials "
@@ -85,7 +85,11 @@ async def hang_up_holders(registry: CallRegistry, settings: Settings) -> DrainRe
         )
         return DrainResult(failed=[c.call_id for c in open_calls])
 
-    twiml = say_and_hangup(settings.closing_message).body
+    twiml = speak_and_hangup(
+        audio_url=settings.resolved_closing_audio_url,
+        text=settings.closing_message,
+        tts_voice=settings.tts_voice,
+    ).body
     result = DrainResult()
     semaphore = asyncio.Semaphore(_CONCURRENCY)
 

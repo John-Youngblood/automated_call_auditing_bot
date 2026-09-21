@@ -19,7 +19,6 @@ from app.config import Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.line_state import LineState
-from app.telephony.provider_client import TelephonyClient
 
 
 def provide_settings() -> Settings:
@@ -38,12 +37,7 @@ def provide_line(conn: HTTPConnection) -> LineState:
     return conn.app.state.line
 
 
-def provide_telephony(conn: HTTPConnection) -> TelephonyClient:
-    return conn.app.state.telephony
-
-
 SettingsDep = Annotated[Settings, Depends(provide_settings)]
 BroadcasterDep = Annotated[Broadcaster, Depends(provide_broadcaster)]
 RegistryDep = Annotated[CallRegistry, Depends(provide_registry)]
 LineDep = Annotated[LineState, Depends(provide_line)]
-TelephonyDep = Annotated[TelephonyClient, Depends(provide_telephony)]

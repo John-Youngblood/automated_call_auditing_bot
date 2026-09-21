@@ -22,9 +22,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import Field
 
-from app.api.deps import LineDep, RegistryDep, SettingsDep, TelephonyDep
+from app.api.deps import LineDep, RegistryDep, SettingsDep
 from app.schemas.calls import Call, CallStatus, CamelModel
 from app.services.call_registry import CallRegistry
+from app.services.decisions import TelephonyUnavailable, put_on_air, turn_away
 from app.services.drain import hang_up_holders as drain_queue
 
 logger = logging.getLogger(__name__)
@@ -61,49 +62,44 @@ async def get_call(call_id: str, registry: RegistryDep) -> Call:
 
 
 @router.post("/calls/{call_id}/accept", summary="Connect the call to a human")
-async def accept_call(
-    call_id: str,
-    registry: RegistryDep,
-    telephony: TelephonyDep,
-    settings: SettingsDep,
-) -> Call:
+async def accept_call(call_id: str, registry: RegistryDep, settings: SettingsDep) -> Call:
     """Bridge the call to a human and mark it accepted.
 
-    The provider command is a placeholder (see
-    :mod:`app.telephony.provider_client`); the state change and its broadcast
-    to every dashboard are real.
-
-    The provider call runs first: if it fails, the call keeps its current
-    status and stays on the dashboard rather than being marked accepted while
-    the caller is still waiting on hold.
+    Twilio acts first: if the bridge fails the call keeps its current status
+    and stays on the dashboard, rather than being marked accepted while the
+    caller is still sitting on hold.
     """
     call = _require(registry, call_id)
+    destination = settings.host_phone_number
 
-    destination = settings.agent_forward_number
-    if not await telephony.bridge(call.call_id, destination):
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, "could not connect the call at the provider"
-        )
+    try:
+        bridged = await put_on_air(call.call_id, destination, settings)
+    except TelephonyUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    if not bridged:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "could not connect the call at Twilio")
 
-    logger.info("accepted call_id=%s -> %s", call_id, destination)
     return registry.set_status(call.call_id, CallStatus.ACCEPTED)
 
 
 @router.post("/calls/{call_id}/reject", summary="Decline the call")
-async def reject_call(call_id: str, registry: RegistryDep, telephony: TelephonyDep) -> Call:
-    """Decline the call and mark it rejected.
+async def reject_call(call_id: str, registry: RegistryDep, settings: SettingsDep) -> Call:
+    """Tell the caller they are not getting on air, then mark it rejected.
 
-    Same placeholder/real split as :func:`accept_call`, and the same ordering
-    rule: the provider acts first, the dashboard state follows.
+    Same ordering rule as :func:`accept_call`, and it matters more here. A
+    rejected call leaves the live queue, so if the hang-up silently failed the
+    caller would be stranded on hold *and* invisible -- see
+    app/services/decisions.py.
     """
     call = _require(registry, call_id)
 
-    if not await telephony.decline(call.call_id):
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, "could not decline the call at the provider"
-        )
+    try:
+        declined = await turn_away(call.call_id, settings)
+    except TelephonyUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    if not declined:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "could not decline the call at Twilio")
 
-    logger.info("rejected call_id=%s", call_id)
     return registry.set_status(call.call_id, CallStatus.REJECTED)
 
 

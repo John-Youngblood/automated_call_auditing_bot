@@ -2,6 +2,8 @@
 
     POST /webhook/incoming-call     a call arrives
     POST /webhook/speech-result     the caller finished describing their reason
+    POST /webhook/queue-exit        the caller left the hold queue
+    POST /webhook/dial-complete     an accepted caller's time with the host ended
     POST /webhook/call-status       the call ended
 
 The flow:
@@ -33,8 +35,9 @@ from fastapi.responses import Response
 
 from app.api.deps import LineDep, RegistryDep, SettingsDep
 from app.schemas.calls import Caller
+from app.services.decisions import DIAL_COMPLETE_PATH
 from app.services.phone import format_location
-from app.telephony import RenderedResponse, answer_and_gather, hold, say_and_hangup
+from app.telephony import RenderedResponse, answer_and_gather, hang_up, hold, speak_and_hangup
 from app.telephony.signature import verify_twilio_signature
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,10 @@ QUEUE_EXIT_PATH = "/webhook/queue-exit"
 #: "bridged" and "redirected" mean they reached a human, so whatever decision
 #: was already recorded stands.
 ABANDONED_QUEUE_RESULTS = frozenset({"hangup", "leave", "error", "system-error", "queue-full"})
+
+#: "Nothing further" -- ends the call. Used wherever an action URL has been
+#: handed control of a leg we have no more plans for.
+_EMPTY_RESPONSE = '<?xml version="1.0" encoding="UTF-8"?><Response />' 
 
 
 async def _form(request: Request) -> dict[str, str]:
@@ -135,14 +142,22 @@ async def incoming_call(
     # rows nobody will read.
     if not line.is_open:
         logger.info("line closed, turning away call_id=%s from=%s", call_id, caller.number)
-        return _twiml(say_and_hangup(settings.closed_line_message))
+        return _twiml(
+            speak_and_hangup(
+                audio_url=settings.resolved_closed_line_audio_url,
+                text=settings.closed_line_message,
+                tts_voice=settings.tts_voice,
+            )
+        )
 
     registry.register_incoming(call_id, caller=caller, to_number=params.get("To"))
     logger.info("call screening call_id=%s from=%s", call_id, caller.number)
 
     return _twiml(
         answer_and_gather(
-            greeting_url=settings.resolved_greeting_url,
+            greeting_audio_url=settings.resolved_greeting_url,
+            greeting_text=settings.greeting_message,
+            tts_voice=settings.tts_voice,
             action_url=f"{settings.public_base_url.rstrip('/')}{SPEECH_RESULT_PATH}",
             speech_model=settings.speech_model,
             language=settings.speech_language,
@@ -190,7 +205,7 @@ async def speech_result(
         hold(
             settings.hold_queue_name,
             f"{settings.public_base_url.rstrip('/')}{QUEUE_EXIT_PATH}",
-            wait_url=settings.hold_music_url,
+            wait_url=settings.resolved_hold_music_url,
         )
     )
 
@@ -234,7 +249,69 @@ async def queue_exit(
     # correct for a caller who already hung up, and harmless for one being
     # bridged, whose new instructions came from the redirect that dequeued
     # them. Worth re-checking once the REST accept path is real.
-    return _twiml(RenderedResponse(body='<?xml version="1.0" encoding="UTF-8"?><Response />'))
+    return _twiml(RenderedResponse(body=_EMPTY_RESPONSE))
+
+
+#: DialCallStatus values meaning the host and the caller actually spoke.
+#: Everything else -- busy, no-answer, failed, canceled -- means the bridge
+#: never happened, which matters because the call is already marked ACCEPTED.
+BRIDGED_DIAL_RESULTS = frozenset({"completed", "answered"})
+
+
+@router.post(
+    DIAL_COMPLETE_PATH,
+    summary="An accepted caller's time with the host ended",
+    response_class=Response,
+)
+async def dial_complete(
+    request: Request,
+    registry: RegistryDep,
+    settings: SettingsDep,
+) -> Response:
+    """Twilio reports how the bridge to the host went.
+
+    Either way the call is over, so it is marked ENDED. ``completed`` means
+    they talked -- the interesting part is how long, which is the only place
+    that number exists. Anything else means the host never picked up, most
+    likely because they were already on air with someone else, and that caller
+    was never connected at all despite the dashboard saying ACCEPTED.
+
+    The ``<Hangup>`` is load-bearing, not decoration. Adding an ``action`` URL
+    changes what ``<Dial>`` does when it finishes: instead of falling off the
+    end of the document, Twilio keeps the *caller's* leg alive and hands
+    control back here. So when the host hangs up first, that caller is still
+    connected and listening to nothing until we say otherwise. An empty
+    document would also end the call, but only as a side effect of running out
+    of verbs -- saying it outright is the difference between a rule and an
+    accident.
+    """
+    params = await _form(request)
+    _check_signature(request, params, settings)
+
+    call_id = params.get("CallSid")
+    result = params.get("DialCallStatus", "unknown")
+    seconds = params.get("DialCallDuration")
+
+    if not call_id:
+        return _twiml(RenderedResponse(body=_EMPTY_RESPONSE))
+
+    on_air_seconds: int | None = None
+    if result in BRIDGED_DIAL_RESULTS:
+        with contextlib.suppress(TypeError, ValueError):
+            on_air_seconds = int(seconds)
+        logger.info("on-air call ended call_id=%s after=%ss", call_id, seconds)
+    else:
+        # ACCEPTED said they got on air; they did not.
+        logger.warning(
+            "bridge to the host did not connect call_id=%s result=%s "
+            "(the host may already be on a call)",
+            call_id,
+            result,
+        )
+
+    registry.end_on_air(call_id, on_air_seconds)
+
+    return _twiml(hang_up())
 
 
 #: Twilio CallStatus values that mean the call is over. The non-terminal ones

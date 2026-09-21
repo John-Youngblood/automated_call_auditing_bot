@@ -34,43 +34,19 @@ import logging
 from app.config import Settings
 from app.schemas.calls import Caller
 from app.services.call_registry import CallRegistry
-from app.telephony.rest import CallDetails, QueueMember, TwilioRestClient
+from app.telephony.rest import (
+    LIVE_CALL_STATUSES,
+    CallDetails,
+    QueueMember,
+    TwilioRestClient,
+    client_from_settings,
+)
 
 logger = logging.getLogger(__name__)
 
 #: Concurrent Call lookups. One request per waiting caller, so this is polite
 #: to Twilio's rate limits while still finishing a full queue quickly.
 _LOOKUP_CONCURRENCY = 10
-
-#: Twilio call statuses worth restoring. A queue member should always be
-#: in-progress; anything else means Twilio's view moved on between the two
-#: requests and the caller is already gone.
-_LIVE_STATUSES = frozenset({"in-progress", "ringing", "queued"})
-
-
-def rest_client(settings: Settings) -> TwilioRestClient | None:
-    """Build a REST client, or ``None`` when credentials are not configured.
-
-    An API key is preferred because it can be revoked without touching the
-    auth token that webhook signature verification depends on.
-    """
-    if not settings.twilio_account_sid:
-        return None
-
-    if settings.twilio_api_key_sid and settings.twilio_api_key_secret:
-        username, password = settings.twilio_api_key_sid, settings.twilio_api_key_secret
-    elif settings.twilio_auth_token:
-        username, password = settings.twilio_account_sid, settings.twilio_auth_token
-    else:
-        return None
-
-    return TwilioRestClient(
-        account_sid=settings.twilio_account_sid,
-        username=username,
-        password=password,
-        timeout_seconds=settings.twilio_api_timeout_seconds,
-    )
-
 
 async def reconcile_hold_queue(registry: CallRegistry, settings: Settings) -> int:
     """Put everyone Twilio still has on hold back on the dashboard.
@@ -89,7 +65,7 @@ async def reconcile_hold_queue(registry: CallRegistry, settings: Settings) -> in
 
 
 async def _reconcile(registry: CallRegistry, settings: Settings) -> int:
-    client = rest_client(settings)
+    client = client_from_settings(settings)
     if client is None:
         logger.info(
             "skipping reconciliation: no Twilio REST credentials "
@@ -113,7 +89,7 @@ async def _reconcile(registry: CallRegistry, settings: Settings) -> int:
     recovered = 0
     for member in members:
         detail = details.get(member.call_sid)
-        if detail is not None and detail.status not in _LIVE_STATUSES:
+        if detail is not None and detail.status not in LIVE_CALL_STATUSES:
             logger.info(
                 "skipping call_id=%s: Twilio reports status=%s", member.call_sid, detail.status
             )
