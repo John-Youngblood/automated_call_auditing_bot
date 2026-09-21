@@ -8,7 +8,7 @@
  * open dashboard updates either way.
  */
 
-import type { Call } from '../types/events';
+import type { Call, LineStateResult } from '../types/events';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -53,4 +53,10 @@ export const callsApi = {
     request<Call>(`/api/calls/${encodeURIComponent(callId)}/accept`, { method: 'POST' }),
   reject: (callId: string) =>
     request<Call>(`/api/calls/${encodeURIComponent(callId)}/reject`, { method: 'POST' }),
+  /**
+   * Go on or off air. Closing turns new callers away *and* hangs up on anyone
+   * still holding, so it can take a moment while those calls are ended.
+   */
+  setLineOpen: (open: boolean) =>
+    request<LineStateResult>(`/api/line/${open ? 'open' : 'close'}`, { method: 'POST' }),
 };

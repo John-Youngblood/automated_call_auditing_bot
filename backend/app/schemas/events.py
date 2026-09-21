@@ -25,6 +25,10 @@ class ServerEventType(StrEnum):
     CALL_INCOMING = "call.incoming"
     CALL_UPDATED = "call.updated"
     CALL_ENDED = "call.ended"
+    #: The line was opened or closed to new callers. Broadcast so every
+    #: dashboard agrees on whether the show is taking calls -- two operators
+    #: disagreeing about that is how someone gets put on air after the show.
+    LINE_CHANGED = "line.changed"
     PONG = "pong"
     ERROR = "error"
 
@@ -47,11 +51,20 @@ class ServerEvent(CamelModel):
     # -- constructors: the only sanctioned way to build an event, so the
     #    payload shape for each type lives in exactly one place ------------
     @classmethod
-    def snapshot(cls, calls: list[Call]) -> ServerEvent:
+    def snapshot(cls, calls: list[Call], line_open: bool = True) -> ServerEvent:
         return cls(
             type=ServerEventType.SNAPSHOT,
-            data={"calls": [c.model_dump(by_alias=True, mode="json") for c in calls]},
+            data={
+                "calls": [c.model_dump(by_alias=True, mode="json") for c in calls],
+                # Carried in the snapshot as well as its own event: a dashboard
+                # opened while the line is closed must not show "on air".
+                "lineOpen": line_open,
+            },
         )
+
+    @classmethod
+    def line_changed(cls, line_open: bool) -> ServerEvent:
+        return cls(type=ServerEventType.LINE_CHANGED, data={"lineOpen": line_open})
 
     @classmethod
     def call_event(

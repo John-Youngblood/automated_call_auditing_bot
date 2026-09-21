@@ -28,6 +28,8 @@ interface State {
    * so this is the signal that tells it something new is worth fetching.
    */
   endedCount: number;
+  /** Whether the show is taking new calls. */
+  lineOpen: boolean;
 }
 
 const initialState: State = {
@@ -36,6 +38,10 @@ const initialState: State = {
   order: [],
   lastError: null,
   endedCount: 0,
+  // Assumed open until the first snapshot says otherwise, which arrives
+  // immediately on connect. The alternative -- assuming closed -- would flash
+  // "off air" on every page load during a live show.
+  lineOpen: true,
 };
 
 type Action =
@@ -80,8 +86,19 @@ function reducer(state: State, action: Action): State {
           // also how the dashboard recovers state after a dropped socket.
           const calls: Record<string, Call> = {};
           for (const call of event.data.calls) calls[call.callId] = call;
-          return { ...state, calls, order: event.data.calls.map((call) => call.callId) };
+          return {
+            ...state,
+            calls,
+            order: event.data.calls.map((call) => call.callId),
+            lineOpen: event.data.lineOpen,
+          };
         }
+
+        case 'line.changed':
+          // Another operator (or this one) opened or closed the line. Every
+          // dashboard follows, so two people cannot disagree about whether
+          // the show is taking calls.
+          return { ...state, lineOpen: event.data.lineOpen };
 
         case 'call.incoming':
         case 'call.updated':
@@ -115,6 +132,8 @@ export interface UseCallStream {
   /** Increments when a call finishes; drives the history view's refetch. */
   endedCount: number;
   lastError: string | null;
+  /** Whether the show is taking new calls. */
+  lineOpen: boolean;
   /** Calls awaiting a decision or being screened, oldest first. */
   activeCalls: Call[];
   /** Recently finished calls, newest first. */
@@ -205,6 +224,7 @@ export function useCallStream(): UseCallStream {
     connection: state.connection,
     endedCount: state.endedCount,
     lastError: state.lastError,
+    lineOpen: state.lineOpen,
     activeCalls,
     recentCalls,
     selectedCall,

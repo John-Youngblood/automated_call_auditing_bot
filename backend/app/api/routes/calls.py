@@ -1,10 +1,12 @@
-"""Screening decisions and the recent-call log.
+"""Screening decisions, the recent-call log, and closing the line.
 
     GET  /api/calls
     GET  /api/calls/{call_id}
     POST /api/calls/{call_id}/accept
     POST /api/calls/{call_id}/reject
     GET  /api/call-history
+    POST /api/line/open
+    POST /api/line/close
 
 The decision endpoints exist alongside the equivalent websocket commands on
 purpose. A decision is a one-shot action that either succeeded or did not, and
@@ -18,10 +20,12 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import Field
 
-from app.api.deps import RegistryDep, SettingsDep, TelephonyDep
-from app.schemas.calls import Call, CallStatus
+from app.api.deps import LineDep, RegistryDep, SettingsDep, TelephonyDep
+from app.schemas.calls import Call, CallStatus, CamelModel
 from app.services.call_registry import CallRegistry
+from app.services.drain import hang_up_holders as drain_queue
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +105,55 @@ async def reject_call(call_id: str, registry: RegistryDep, telephony: TelephonyD
 
     logger.info("rejected call_id=%s", call_id)
     return registry.set_status(call.call_id, CallStatus.REJECTED)
+
+
+class LineStateResponse(CamelModel):
+    """Whether the line is taking calls, and what closing it did to the queue.
+
+    ``failed`` is reported separately because those callers are still
+    connected and still hearing hold music. Silence would let an operator walk
+    away believing the line was clear.
+    """
+
+    open: bool
+    #: Callers hung up as part of closing. Empty when opening.
+    ended_call_ids: list[str] = Field(default_factory=list)
+    #: Callers we could not reach. They keep their place on the dashboard.
+    failed_call_ids: list[str] = Field(default_factory=list)
+    #: True when hanging up hit its deadline, so `failed` understates it.
+    timed_out: bool = False
+
+
+@router.post("/line/open", summary="Start accepting calls")
+async def open_line(line: LineDep) -> LineStateResponse:
+    line.set_open(True)
+    return LineStateResponse(open=True)
+
+
+@router.post("/line/close", summary="Stop accepting calls and clear the queue")
+async def close_line(
+    line: LineDep, registry: RegistryDep, settings: SettingsDep
+) -> LineStateResponse:
+    """End the show, in one action.
+
+    Closes the line to new callers *and* hangs up on anyone still holding,
+    always -- there is no version of this where some callers are left on a
+    line nobody is watching. The order matters: close first, so a caller
+    dialling during the hang-ups is turned away rather than joining a queue
+    that is being emptied.
+
+    Deliberately not a shutdown hook: a deploy and a wrap-up arrive as the
+    same signal, and draining on every restart would hang up on live callers
+    each time someone ships. See app/services/drain.py.
+    """
+    line.set_open(False)
+    result = await drain_queue(registry, settings)
+    return LineStateResponse(
+        open=False,
+        ended_call_ids=result.ended,
+        failed_call_ids=result.failed,
+        timed_out=result.timed_out,
+    )
 
 
 def _require(registry: CallRegistry, call_id: str) -> Call:

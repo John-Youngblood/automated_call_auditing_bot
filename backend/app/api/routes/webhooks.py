@@ -31,10 +31,10 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from app.api.deps import RegistryDep, SettingsDep
+from app.api.deps import LineDep, RegistryDep, SettingsDep
 from app.schemas.calls import Caller
 from app.services.phone import format_location
-from app.telephony import RenderedResponse, answer_and_gather, hold
+from app.telephony import RenderedResponse, answer_and_gather, hold, say_and_hangup
 from app.telephony.signature import verify_twilio_signature
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,7 @@ async def incoming_call(
     request: Request,
     registry: RegistryDep,
     settings: SettingsDep,
+    line: LineDep,
 ) -> Response:
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -127,6 +128,14 @@ async def incoming_call(
             params.get("FromCountry"),
         ),
     )
+
+    # Off air: turn them away before anything else. Deliberately not
+    # registered -- a caller who was never screened does not belong in the
+    # queue or the history, and a closed line should not silently accumulate
+    # rows nobody will read.
+    if not line.is_open:
+        logger.info("line closed, turning away call_id=%s from=%s", call_id, caller.number)
+        return _twiml(say_and_hangup(settings.closed_line_message))
 
     registry.register_incoming(call_id, caller=caller, to_number=params.get("To"))
     logger.info("call screening call_id=%s from=%s", call_id, caller.number)

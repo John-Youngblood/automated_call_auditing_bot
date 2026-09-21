@@ -7,10 +7,11 @@ outbound audio all assumed Twilio -- so "multi-provider" was true of one file
 out of four and false everywhere it mattered. Supporting a second provider is
 a real project; pretending to support one is worse than not.
 
-Two documents, one per moment in a screened call:
+Three documents:
 
     answer_and_gather()  greet, then listen for why they are calling
     hold()               park them while an operator reads the transcript
+    say_and_hangup()     turn someone away with a reason
 
 Built with ElementTree rather than f-strings: caller-supplied values end up in
 these documents, and string-built XML is an injection waiting to happen.
@@ -126,3 +127,27 @@ def hold(queue_name: str, action_url: str, wait_url: str = "") -> RenderedRespon
     enqueue.text = queue_name
     return _document(response)
 
+
+
+def say_and_hangup(message: str, voice: str = "Polly.Joanna") -> RenderedResponse:
+    """Say one thing, then end the call.
+
+    Used at both ends of a show: turning away a caller who dialled after the
+    line closed, and clearing anyone still holding when it does. Both are
+    deliberately spoken rather than a bare ``<Hangup>`` or a ``<Reject>``
+    busy signal -- a listener who gets silence assumes the number is broken
+    and calls back, which is worse for them and for us.
+
+    The cost of that choice: ``<Say>`` answers the call, so these seconds are
+    billed, where ``<Reject>`` would not be. A few seconds per turned-away
+    caller is the right trade for a show whose callers are its audience.
+
+    ``message`` is configuration and is *built* into the document, never
+    interpolated -- an apostrophe or an angle bracket in a message someone
+    edits at 2am must not be able to produce a different document.
+    """
+    response = Element("Response")
+    say = SubElement(response, "Say", {"voice": voice})
+    say.text = message
+    SubElement(response, "Hangup")
+    return _document(response)

@@ -28,9 +28,19 @@
   /* The logo's palette, run right-to-left relative to the logo itself. The
      sky blue is too light to carry white type, and the brand name sits on the
      left -- so the saturated end goes under the text and the blue fades in
-     over the empty middle. Every stop left of centre clears 4.5:1 on white. */
-  --brand-gradient: linear-gradient(107deg, #9b2fb8 0%, #b137c8 24%, #a259e0 54%, #8fb8ee 82%, #7ed9f8 100%);
+     over the empty middle. Every stop left of centre clears 4.5:1 on white.
+
+     Defined as bare stops so the header and the mirrored footer are built
+     from one list: 287deg is 107 + 180, which is the same ramp run backwards.
+     Redefining the stops per theme below is enough -- custom properties
+     substitute at use time, so both gradients follow. */
+  --brand-stops: #9b2fb8 0%, #b137c8 24%, #a259e0 54%, #8fb8ee 82%, #7ed9f8 100%;
+  --brand-gradient: linear-gradient(107deg, var(--brand-stops));
+  --brand-gradient-reverse: linear-gradient(287deg, var(--brand-stops));
   --radius: 10px;
+  /* Referenced by the toast stack so it clears the footer bar. Keep the two
+     in step: a toast sitting under the controls is a toast nobody reads. */
+  --footer-height: 52px;
   --shadow: 0 1px 2px rgb(26 21 36 / 6%), 0 1px 3px rgb(26 21 36 / 8%);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -53,8 +63,8 @@
     --warning-soft: #2a2115;
     /* Same hues and the same direction, dropped in luminance. The light
        gradient at full strength glares against a dark body and pulls the eye
-       off the queue. */
-    --brand-gradient: linear-gradient(107deg, #6e1f84 0%, #7c2790 24%, #6f3d9e 54%, #3f6f96 82%, #3f93b4 100%);
+       off the queue. Only the stops are restated; both gradients follow. */
+    --brand-stops: #6e1f84 0%, #7c2790 24%, #6f3d9e 54%, #3f6f96 82%, #3f93b4 100%;
     --shadow: 0 1px 2px rgb(0 0 0 / 40%);
   }
 }
@@ -129,6 +139,39 @@ h2 {
   /* Fixed white rather than --text: the gradient is the same in both themes,
      so the type on it cannot follow the theme. */
   color: #fff;
+}
+
+/* Line controls live down here rather than in the header: going off air is a
+   once-a-show decision, and it should not sit beside the tabs an operator
+   uses constantly. Left-aligned, toggle first -- the button is the thing you
+   aim for, the pill is what you read back. */
+.app__footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: var(--footer-height);
+  padding: 8px 20px;
+  /* Mirrors the header rather than repeating it, so the two bars read as a
+     pair framing the work surface instead of one banner printed twice. */
+  background: var(--brand-gradient-reverse);
+  border-top: 1px solid rgb(0 0 0 / 14%);
+}
+
+/* A dark scrim, not the header tabs' translucent white. Mirroring the
+   gradient put the controls over the sky-blue end, where white on a white
+   scrim is about 1.6:1 -- invisible. 45% black is what it takes to clear
+   4.5:1 against the palest stop, and it holds along the whole ramp, so the
+   controls read the same wherever the bar is resized to. */
+.app__footer .button--ghost,
+.app__footer .line-state {
+  color: #fff;
+  background: rgb(0 0 0 / 45%);
+  border-color: rgb(255 255 255 / 22%);
+}
+
+.app__footer .button--ghost:hover:not(:disabled) {
+  background: rgb(0 0 0 / 58%);
 }
 
 /* Two panes on desktop; the queue collapses above the detail on narrow
@@ -590,9 +633,11 @@ h2 {
   background: currentcolor;
 }
 
+/* Quiet while healthy. This is plumbing, and a green pill here competed with
+   the line-state pill for the eye. The unhealthy states below stay loud. */
 .badge--open {
-  color: var(--success);
-  background: var(--success-soft);
+  color: rgb(255 255 255 / 80%);
+  background: rgb(0 0 0 / 18%);
 }
 
 .badge--connecting,
@@ -840,7 +885,185 @@ h2 {
   opacity: 0.75;
 }
 
+/* ---------------------------------------------------------------- toasts -- */
+/* Bottom-right and out of the way of the queue, which is what an operator is
+   actually reading. Fixed rather than in flow: a confirmation must not push
+   the call list down and move the row someone is about to click. */
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--footer-height) + 12px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px 11px 14px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgb(26 21 36 / 16%);
+  pointer-events: auto;
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast--ok {
+  border-left-color: var(--success);
+}
+
+/* Something still needs a human -- a caller we could not hang up is still
+   connected -- so this one is louder and never expires on its own. */
+.toast--warn {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: currentcolor;
+  border-left-color: var(--warning);
+}
+
+.toast__message {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast__dismiss {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.toast__dismiss:hover {
+  opacity: 1;
+  background: rgb(127 127 127 / 18%);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* A toast sliding in beside a live transcript is motion nobody asked for. */
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------- dialog -- */
+.dialog {
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 0;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgb(26 21 36 / 22%);
+}
+
+.dialog::backdrop {
+  background: rgb(26 21 36 / 45%);
+}
+
+.dialog__body {
+  padding: 20px;
+}
+
+.dialog__title {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+
+.dialog__message p {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.dialog__message p:last-child {
+  margin-bottom: 0;
+}
+
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.dialog__actions .button {
+  flex: 0 0 auto;
+}
+
 /* --------------------------------------------------------- button variants */
+/* Destructive, and the only one of its kind: closing the line hangs up on
+   real people. Red so it never reads as a peer of the tabs it sits beside. */
+.button--danger {
+  background: var(--danger);
+}
+
+/* Line-state pill, its toggle, and the queue-clearing control, side by side. */
+.line-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Reads at a glance from across a studio: the one piece of state where being
+   wrong means putting a stranger on air after the show has ended. Sits on the
+   footer gradient, so it carries its own colour rather than inheriting one. */
+.line-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  background: rgb(0 0 0 / 22%);
+  border-radius: 999px;
+}
+
+.line-state__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.5;
+}
+
+/* A brighter green than --success, which is tuned for white backgrounds and
+   goes muddy against purple. */
+.line-state--open .line-state__dot {
+  background: #46d17e;
+  opacity: 1;
+  box-shadow: 0 0 0 3px rgb(70 209 126 / 28%);
+}
+
 .button--ghost {
   color: var(--text);
   background: transparent;

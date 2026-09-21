@@ -1,10 +1,13 @@
 import { useState } from 'react';
 
 import { useCallHistory } from '../hooks/useCallHistory';
+import { useToasts } from '../hooks/useToasts';
 import { useCallStream } from '../hooks/useCallStream';
 import { useNow } from '../hooks/useNow';
 import { formatClock, formatElapsed, formatPhoneNumber, statusLabel } from '../lib/format';
 import CallActions from './CallActions';
+import LineControls from './LineControls';
+import Toasts from './Toasts';
 import CallHistoryView from './CallHistoryView';
 import CallQueue from './CallQueue';
 import ConnectionBadge from './ConnectionBadge';
@@ -35,12 +38,15 @@ export default function Dashboard() {
     pendingCallId,
     dismissError,
     endedCount,
+    lineOpen,
   } = useCallStream();
 
   const now = useNow();
 
   // Only fetch history while that view is open; the queue is the hot path.
   const history = useCallHistory(endedCount, view === 'history');
+
+  const { toasts, push, dismiss } = useToasts();
 
   return (
     <div className="app">
@@ -84,6 +90,7 @@ export default function Dashboard() {
         </div>
       )}
 
+
       {view === 'live' ? (
         <main className="app__body">
           <CallQueue
@@ -99,7 +106,9 @@ export default function Dashboard() {
               <div className="detail__placeholder">
                 <h2>Waiting for calls</h2>
                 <p>
-                  Incoming calls appear here once the caller has said why they’re calling.
+                  {lineOpen
+                    ? 'Incoming calls appear here once the caller has said why they’re calling.'
+                    : 'The line is closed — new callers are being turned away.'}
                   {connection !== 'open' && ' Reconnecting to the call stream…'}
                 </p>
               </div>
@@ -159,6 +168,15 @@ export default function Dashboard() {
           />
         </main>
       )}
+
+      {/* Below the work surface on purpose. Going off air is a once-a-show
+          decision, not something an operator reaches for between calls, and
+          it does not belong next to the tabs they use constantly. */}
+      <footer className="app__footer">
+        <LineControls open={lineOpen} onNotice={push} />
+      </footer>
+
+      <Toasts toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

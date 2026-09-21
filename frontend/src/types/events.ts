@@ -70,6 +70,7 @@ export type ServerEventType =
   | 'call.incoming'
   | 'call.updated'
   | 'call.ended'
+  | 'line.changed'
   | 'pong'
   | 'error';
 
@@ -84,10 +85,14 @@ interface BaseServerEvent {
  * no-op at runtime.
  */
 export type ServerEvent =
-  | (BaseServerEvent & { type: 'state.snapshot'; data: { calls: Call[] } })
+  | (BaseServerEvent & {
+      type: 'state.snapshot';
+      data: { calls: Call[]; lineOpen: boolean };
+    })
   | (BaseServerEvent & { type: 'call.incoming'; data: { call: Call } })
   | (BaseServerEvent & { type: 'call.updated'; data: { call: Call } })
   | (BaseServerEvent & { type: 'call.ended'; data: { call: Call } })
+  | (BaseServerEvent & { type: 'line.changed'; data: { lineOpen: boolean } })
   | (BaseServerEvent & { type: 'pong'; data: Record<string, never> })
   | (BaseServerEvent & { type: 'error'; data: { message: string } });
 
@@ -107,3 +112,19 @@ export function isServerEvent(value: unknown): value is ServerEvent {
   );
 }
 
+
+/**
+ * Result of `POST /api/line/open` and `POST /api/line/close`.
+ *
+ * Closing hangs up on whoever was holding, so the outcome of that comes back
+ * here too. Successes and failures are separate because a caller we could not
+ * reach is still connected and still hearing hold music — silence would let
+ * an operator walk away believing the line was clear.
+ */
+export interface LineStateResult {
+  open: boolean;
+  endedCallIds: string[];
+  failedCallIds: string[];
+  /** Hanging up hit its deadline, so `failedCallIds` understates it. */
+  timedOut: boolean;
+}

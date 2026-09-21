@@ -1,18 +1,20 @@
-"""Reading state back out of Twilio.
+"""Talking to Twilio's REST API.
 
-Everything else in this package is Twilio talking to us, or us telling Twilio
-to change a call. This is the third direction: asking Twilio what it currently
-knows, which matters in exactly one place -- startup, when this process has
-just lost its memory and Twilio has not.
+Most of this package is Twilio talking to us. This is the other direction:
+asking what Twilio currently knows, and telling it to change a live call.
+
+    GET  /Queues.json                        find the hold queue by name
+    GET  /Queues/{sid}/Members.json          who is waiting in it
+    GET  /Calls/{sid}.json                   who that caller actually is
+    POST /Calls/{sid}.json                   send a live call new instructions
+
+The reads serve startup reconciliation; the write serves closing the line at
+the end of a show. See app/services/reconcile.py and app/services/drain.py.
 
 Deliberately hand-rolled on ``httpx`` rather than ``twilio-python``: we need
-three read endpoints, the official SDK is synchronous (requests-based, no
-asyncio client), and dropping a blocking call into the loop that serves the
-dashboard sockets would be a worse trade than forty lines of HTTP.
-
-    GET /Queues.json                         find the hold queue by name
-    GET /Queues/{sid}/Members.json           who is waiting in it
-    GET /Calls/{sid}.json                    who that caller actually is
+four endpoints, the official SDK is synchronous (requests-based, no asyncio
+client), and dropping a blocking call into the loop that serves the dashboard
+sockets would be a worse trade than fifty lines of HTTP.
 """
 
 from __future__ import annotations
@@ -68,10 +70,11 @@ def _parse_rfc2822(value: str | None) -> datetime | None:
 
 
 class TwilioRestClient:
-    """Read-only client for the handful of endpoints reconciliation needs.
+    """Client for the handful of endpoints this service actually uses.
 
-    Not a general Twilio SDK and not trying to be. Commands that change a live
-    call still live in :mod:`app.telephony.provider_client`.
+    Not a general Twilio SDK and not trying to be. The accept/reject commands
+    are still stubs in :mod:`app.telephony.provider_client`; when those become
+    real they belong here, and that module goes away.
     """
 
     def __init__(
@@ -93,18 +96,20 @@ class TwilioRestClient:
     async def __aexit__(self, *exc: object) -> None:
         await self._client.aclose()
 
-    async def _get(self, path: str) -> dict | None:
-        """One GET. Returns ``None`` for anything that is not a usable 200.
+    async def _request(
+        self, method: str, path: str, data: dict[str, str] | None = None
+    ) -> dict | None:
+        """One request. Returns ``None`` for anything that is not a usable 2xx.
 
-        Swallows rather than raises: every caller is a best-effort background
-        read where the right response to Twilio being unavailable is to log it
-        and carry on with an empty result.
+        Swallows rather than raises: every caller is best-effort, where the
+        right response to Twilio being unavailable is to log it and report the
+        failure upwards rather than turn it into a 500.
         """
         url = path if path.startswith("http") else f"{API_ROOT}/Accounts/{self._account_sid}{path}"
         try:
-            response = await self._client.get(url)
+            response = await self._client.request(method, url, data=data)
         except httpx.HTTPError as exc:
-            logger.warning("twilio GET %s failed: %s", path, exc)
+            logger.warning("twilio %s %s failed: %s", method, path, exc)
             return None
 
         if response.status_code == httpx.codes.NOT_FOUND:
@@ -114,10 +119,17 @@ class TwilioRestClient:
             # credentials are wrong, which is a different problem from Twilio
             # being down and wants a different fix.
             logger.warning(
-                "twilio GET %s returned %s: %s", path, response.status_code, response.text[:200]
+                "twilio %s %s returned %s: %s",
+                method,
+                path,
+                response.status_code,
+                response.text[:200],
             )
             return None
         return response.json()
+
+    async def _get(self, path: str) -> dict | None:
+        return await self._request("GET", path)
 
     async def find_queue_sid(self, friendly_name: str) -> str | None:
         """The SID of the queue with this name, or ``None`` if it has none.
@@ -189,3 +201,25 @@ class TwilioRestClient:
             started_at=_parse_rfc2822(payload.get("start_time")),
             status=payload.get("status") or "unknown",
         )
+
+    async def end_call(self, call_sid: str, twiml: str) -> bool:
+        """Pull a live call out of whatever it is doing and run ``twiml``.
+
+        Used to close the line: the document says goodbye and hangs up, which
+        is meaningfully better than ``Status=completed``. A silent drop is
+        indistinguishable from a dropped connection to the person on the other
+        end, and someone who has been on hold for ten minutes deserves to be
+        told the show is over rather than left wondering.
+
+        A 404 counts as success. It means the call is already gone, and the
+        goal here is "this caller is no longer holding", which is satisfied.
+        """
+        payload = await self._request("POST", f"/Calls/{call_sid}.json", data={"Twiml": twiml})
+        if payload is not None:
+            return True
+
+        # _request already logged the reason. Distinguish "already ended" from
+        # a real failure so the operator is not told a hang-up failed when the
+        # caller had simply hung up first.
+        probe = await self.fetch_call(call_sid)
+        return probe is None or probe.status not in {"in-progress", "ringing", "queued"}

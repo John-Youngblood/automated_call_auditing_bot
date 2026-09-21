@@ -25,6 +25,7 @@ from app.api.routes import calls, frontend, health, webhooks
 from app.config import Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
+from app.services.line_state import LineState
 from app.services.reconcile import reconcile_hold_queue
 from app.telephony.provider_client import create_telephony_client
 
@@ -61,11 +62,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         broadcaster=broadcaster,
         history_size=settings.call_history_size,
     )
+    app.state.line = LineState(broadcaster, is_open=settings.line_open_on_start)
 
     log.info(
-        "call screener up env=%s public=%s",
+        "call screener up env=%s public=%s line=%s",
         settings.app_env,
         settings.public_base_url,
+        "open" if app.state.line.is_open else "CLOSED",
     )
     if app.state.telephony.is_placeholder:
         log.warning(

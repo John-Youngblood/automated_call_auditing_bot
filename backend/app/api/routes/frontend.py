@@ -28,7 +28,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from app.api.deps import BroadcasterDep, RegistryDep
+from app.api.deps import BroadcasterDep, LineDep, RegistryDep
 from app.schemas.calls import CallStatus
 from app.schemas.events import ClientCommand, ClientCommandType, ServerEvent
 from app.services.broadcaster import CLOSE_SENTINEL, Subscriber
@@ -44,13 +44,14 @@ async def frontend_stream(
     websocket: WebSocket,
     broadcaster: BroadcasterDep,
     registry: RegistryDep,
+    line: LineDep,
 ) -> None:
     await websocket.accept()
 
     async with broadcaster.subscribe(kind="dashboard") as subscriber:
         # Replay current state first. Without this, a dashboard opened
         # mid-call shows an empty queue until the next event happens to fire.
-        await websocket.send_json(registry.snapshot_event().to_wire())
+        await websocket.send_json(registry.snapshot_event(line.is_open).to_wire())
 
         reader = asyncio.create_task(_read_commands(websocket, registry), name="dash-reader")
         writer = asyncio.create_task(_write_events(websocket, subscriber), name="dash-writer")

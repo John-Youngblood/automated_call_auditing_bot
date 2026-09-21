@@ -55,6 +55,28 @@ class Settings(BaseSettings):
     #: <Enqueue> without a waitUrl, which gets Twilio's default classical
     #: playlist. Twilio loops whichever it is for as long as the caller waits.
     hold_music_url: str = ""
+
+    #: Whether the line accepts calls when the process starts. True keeps a
+    #: restart invisible mid-show, which is the case that matters most -- a
+    #: deploy must not silently stop taking calls while you are on air. Set
+    #: false for a deployment that should come up off-air and be opened by
+    #: hand. Not persisted either way; this is the only source of truth at boot.
+    line_open_on_start: bool = True
+
+    #: Spoken to anyone who calls while the line is closed. Tells them when to
+    #: try again rather than leaving them with a busy signal they will read as
+    #: a broken number.
+    closed_line_message: str = (
+        "Thanks for calling. We are not taking calls right now. "
+        "Please try again during the next live show."
+    )
+
+    #: Spoken to anyone still holding when an operator clears the queue. They
+    #: have been waiting to get on air, so they are told rather than dropped.
+    closing_message: str = (
+        "Thanks for calling. The show has ended for tonight, so we are closing the line. "
+        "Please call back next time."
+    )
     validate_webhook_signature: bool = False
 
     #: Signature verification is HMAC'd with the *auth token* specifically --

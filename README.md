@@ -101,13 +101,15 @@ Four details that matter:
 │   │   ├── config.py         # typed settings, the only reader of the environment
 │   │   ├── api/routes/
 │   │   │   ├── webhooks.py       # the four Twilio webhooks
-│   │   │   ├── calls.py          # accept / reject / call-history
+│   │   │   ├── calls.py          # accept / reject / history / line control
 │   │   │   ├── frontend.py       # WS /ws/frontend
 │   │   │   └── health.py
 │   │   ├── services/
 │   │   │   ├── call_registry.py  # single writer of call state, live + recent
 │   │   │   ├── broadcaster.py    # bounded-queue fan-out to dashboards
 │   │   │   ├── reconcile.py      # rebuild the queue from Twilio on boot
+│   │   │   ├── drain.py          # hang up on holders when the line closes
+│   │   │   ├── line_state.py     # open / closed, broadcast to dashboards
 │   │   │   └── phone.py          # caller location labels
 │   │   └── telephony/            # Twilio-specific code, all of it
 │   │       ├── twiml.py              # the two XML documents
@@ -183,6 +185,56 @@ Three things worth knowing about the implementation:
 Needs `TWILIO_ACCOUNT_SID` plus an API key. Set `RECONCILE_ON_STARTUP=false`
 to turn it off.
 
+## On air and off air
+
+The header carries a `LINE OPEN` / `LINE CLOSED` pill and one button.
+
+**Closing the line does both halves of ending a show**, always:
+
+- new callers hear `CLOSED_LINE_MESSAGE` and are hung up — not queued where
+  nobody is watching, and not written to history, since a closed line should
+  not accumulate rows nobody will read;
+- anyone still on hold is played `CLOSING_MESSAGE` and disconnected, rather
+  than cut off with `Status=completed`. Someone who has waited ten minutes to
+  get on air deserves to be told the show is over, not dropped into silence
+  they will read as a bad line.
+
+It is one action deliberately: there is no state where some callers are left
+waiting on a line nobody is watching. The trade is that you cannot go off air
+and keep working through the queue you already have. If that turns out to
+matter, split the endpoint — `drain.py` is already separate from
+`line_state.py`.
+
+Closing asks first, in a modal that spells out both halves, because what it
+does is invisible: the callers it turns away are ones the operator will never
+see. Opening goes straight through.
+
+Note `<Say>` answers the call, so the seconds spent turning a caller away are
+billed; `<Reject>` would be free but gives a busy signal a listener reads as a
+broken number.
+
+The pill uses the same words as the button that changes it, and green is
+reserved for it alone — the connection badge beside it reads `Connected` in
+quiet white, because "Live" next to "On air" read as two opinions on the same
+question. Connection state stays visible (an empty queue and a dead socket look
+identical otherwise) but only shouts when it is wrong.
+
+The state is broadcast over the websocket, so every dashboard agrees — two
+operators disagreeing about whether the show is taking calls is how somebody
+gets put on air after it has ended. It is **in memory**, like everything else:
+a restart comes back to `LINE_OPEN_ON_START` (default open, so a deploy cannot
+silently take you off air mid-show).
+
+**Closing is not a shutdown hook**, deliberately. A deploy and a wrap-up arrive
+as the same SIGTERM, so draining on shutdown would hang up on live callers every
+time someone ships — and would make [reconciliation](#surviving-a-restart) dead
+code.
+
+Callers that could not be hung up are reported separately and **stay on the
+dashboard**, because they are still connected and still hearing hold music.
+The line closes either way. Hanging up needs the same REST credentials as
+reconciliation; turning new callers away needs none.
+
 ## Going live
 
 1. Expose the backend publicly — Twilio dials in from the internet:
@@ -254,5 +306,5 @@ so a second worker would see a different set of calls. See
 | --- | --- |
 | Accept / Reject | State changes and broadcasts are real; both Twilio REST commands (bridge, decline) are logged stubs in [provider_client.py](backend/app/telephony/provider_client.py), so Accept does not yet put anyone on air |
 | Caller names | Requires Caller ID Lookup enabled on the number (paid, off by default). Without it every caller is a bare number |
-| Auth | No login on the dashboard and no authorisation on the API |
+| Auth | No login on the dashboard and no authorisation on the API — including `POST /api/line/close`, which takes the show off air and hangs up on every live caller |
 | Providers | Twilio only. `<Gather input="speech">` has no direct equivalent elsewhere, so another provider means a real port, not a config change |

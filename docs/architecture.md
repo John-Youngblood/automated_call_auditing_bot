@@ -149,6 +149,47 @@ Two implementation notes that are easy to get wrong:
   mid-webhook while reconciliation runs, and a blank recovered row landing on
   top of a live one would destroy the transcript that survived.
 
+### Two states, and what that costs
+
+Closing the line does both halves at once: stops new callers *and* hangs up on
+whoever is holding. Two states, open and closed, with no third.
+
+There is an argument for three — off air but still working through the queue
+you already have, which is arguably how a show actually ends. It was built that
+way first and then collapsed, deliberately: two controls meant an operator
+could leave the line closed with people still on it, which is the exact failure
+everything else here exists to prevent. One button that always does the same
+thing is harder to get wrong at the end of a long show.
+
+The cost is real. You cannot go off air and keep taking the three good callers
+you already had. If that becomes the thing people want, the split is cheap to
+restore — `drain.py` never merged into `line_state.py`, and the endpoint calls
+them in sequence rather than one implying the other.
+
+### The two ends of the same problem
+
+Twilio holds a caller forever and never tells us. Two features exist because of
+that single fact, and they pull in opposite directions:
+
+| | `services/reconcile.py` | `services/drain.py` |
+| --- | --- | --- |
+| Trigger | process start | an operator's click |
+| Assumes | the callers should come back | the callers should be let go |
+| On failure | empty queue, log line | caller stays on the dashboard |
+
+The temptation is to make draining a shutdown hook, which is why it is worth
+writing down that it must not be. A deploy and a wrap-up are the same SIGTERM.
+Draining on shutdown would hang up on live callers on every deploy and leave
+reconciliation as code that only runs after a crash — the two features would
+cancel each other out. Ending the show is a human decision, so it gets a
+button, and shutdown stays recoverable.
+
+Both order their side effects the same way: Twilio acts first, local state
+follows. A caller we failed to hang up keeps their card on the dashboard rather
+than vanishing from the queue while still connected, for the same reason
+`register_recovered` refuses to overwrite a live call — the dashboard must
+never be more optimistic than the carrier.
+
 ### Why there is no database
 
 There was one: SQLite via SQLAlchemy, holding a blocklist and a `call_history`
