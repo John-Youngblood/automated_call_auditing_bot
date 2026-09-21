@@ -21,12 +21,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import calls, frontend, health, webhooks
+from app.api.routes import calls, frontend, health, session, webhooks
 from app.config import Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.line_state import LineState
 from app.services.reconcile import reconcile_hold_queue
+from app.services.sessions import MIN_PASSWORD_LENGTH, Sessions
 from app.telephony.rest import client_from_settings
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         history_size=settings.call_history_size,
     )
     app.state.line = LineState(broadcaster, is_open=settings.line_open_on_start)
+    app.state.sessions = Sessions(settings.dashboard_password)
 
     log.info(
         "call screener up env=%s public=%s line=%s",
@@ -81,6 +83,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning(
             "VALIDATE_WEBHOOK_SIGNATURE is off outside local -- the call webhook is spoofable"
         )
+
+    # An open dashboard on a public URL means anyone who finds it can read
+    # every caller's transcript and take the show off air.
+    if settings.app_env != "local":
+        if not settings.dashboard_password:
+            raise RuntimeError(
+                "DASHBOARD_PASSWORD is not set. The dashboard and the API would "
+                "be open to anyone who finds the URL."
+            )
+        if len(settings.dashboard_password) < MIN_PASSWORD_LENGTH:
+            raise RuntimeError(
+                f"DASHBOARD_PASSWORD is shorter than {MIN_PASSWORD_LENGTH} characters. "
+                "It is a shared secret on a public URL with no rate limiting."
+            )
+    elif not settings.dashboard_password:
+        log.warning("DASHBOARD_PASSWORD is not set -- the dashboard is open")
 
     # A misconfigured host number is silent in the worst way: Accept succeeds,
     # the dashboard says the caller is on air, and Twilio dials a number that
@@ -143,6 +161,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(webhooks.router)
+    app.include_router(session.router)
     app.include_router(calls.router)
     app.include_router(frontend.router)
 

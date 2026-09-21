@@ -20,6 +20,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import Field
 
+from app.api.auth import RequireSession
 from app.api.deps import LineDep, RegistryDep, SettingsDep
 from app.schemas.calls import Call, CallStatus, CamelModel
 from app.services.call_registry import CallRegistry
@@ -28,7 +29,7 @@ from app.services.drain import hang_up_holders as drain_queue
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["calls"])
+router = APIRouter(prefix="/api", tags=["calls"], dependencies=[RequireSession])
 
 
 @router.get("/calls", summary="Calls currently in the screening queue")

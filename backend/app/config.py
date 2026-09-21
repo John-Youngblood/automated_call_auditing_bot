@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     #: default is a placeholder main.py refuses to start on outside local.
     host_phone_number: str = "+15550000000"
 
+    #: Shared password for the dashboard. Blank leaves it open, which
+    #: main.py only tolerates locally. Exchanged for a session token; see
+    #: app/services/sessions.py.
+    dashboard_password: str = ""
+
     # --- Twilio credentials ------------------------------------------------
     validate_webhook_signature: bool = False
 

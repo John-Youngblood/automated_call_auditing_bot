@@ -7,6 +7,7 @@
  */
 
 import type { Call, LineStateResult } from '../types/events';
+import { clearToken, readToken, storeToken } from './auth';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -18,13 +19,28 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
+
+  /** The token is missing, wrong, or died with a backend restart. */
+  get needsSignIn(): boolean {
+    return this.status === 401;
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = readToken();
   const response = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
+
+  if (response.status === 401) {
+    // Drop it rather than keep retrying with a token the server has forgotten.
+    clearToken();
+  }
 
   if (!response.ok) {
     // FastAPI puts the reason in `detail`; fall back to the status text.
@@ -57,4 +73,24 @@ export const callsApi = {
    */
   setLineOpen: (open: boolean) =>
     request<LineStateResult>(`/api/line/${open ? 'open' : 'close'}`, { method: 'POST' }),
+};
+
+export const sessionApi = {
+  /** Exchange the dashboard password for a token, and remember it. */
+  async logIn(password: string): Promise<void> {
+    const { token } = await request<{ token: string }>('/api/session', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    });
+    storeToken(token);
+  },
+
+  async logOut(): Promise<void> {
+    // Best effort: the token is dropped locally whatever the server says.
+    try {
+      await request<void>('/api/session', { method: 'DELETE' });
+    } finally {
+      clearToken();
+    }
+  },
 };

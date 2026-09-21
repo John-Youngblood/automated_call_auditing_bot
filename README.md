@@ -58,6 +58,22 @@ dashboard with its transcript.
 so without `TWILIO_ACCOUNT_SID` and an API key they return `503` rather than
 pretending to work. Everything else works offline.
 
+### Running it for a real show
+
+The development stack above reloads on every file save, which empties the
+queue. For an actual show, run the built images on a machine in the office and
+let everyone else open it over the LAN:
+
+```bash
+make office
+```
+
+Three containers: nginx serving the dashboard, the backend, and a Cloudflare
+tunnel so Twilio can reach it without touching the router. Colleagues need
+nothing installed. See **[docs/office.md](docs/office.md)** for the one-time
+setup, or **[docs/deploy.md](docs/deploy.md)** to run it on Google Cloud
+instead.
+
 ### Without Docker
 
 ```bash
@@ -157,7 +173,8 @@ something the phone line didn't do. Twilio acts first, local state follows, and
 a command that fails leaves the call visible rather than quietly resolved.
 
 `docs/architecture.md` has the why — the trade-offs, the failure modes, and
-what to change when the assumptions stop holding.
+what to change when the assumptions stop holding. `docs/deploy.md` covers
+running it on Google Cloud.
 
 ---
 
@@ -190,6 +207,12 @@ waiting on a line nobody is watching. It asks first.
 **Call History** shows finished calls, and marks which ones actually made it on
 air and for how long. It's in memory, so it clears when the backend restarts.
 
+**Signing in.** One shared `DASHBOARD_PASSWORD`, traded for a session token.
+No accounts, no reset flow. Tokens are held in memory, so a restart signs
+everyone out — which is also how you revoke one. Leave the password blank
+locally and the dashboard is open; anywhere else the service refuses to start
+without it.
+
 **A restart mid-show doesn't strand callers.** On boot the service asks Twilio
 who is still in the hold queue and puts them back on the dashboard. Their
 transcript can't be recovered — it only ever existed in memory — so those rows
@@ -201,7 +224,7 @@ say so rather than looking like a caller who stayed silent.
 
 | | |
 |---|---|
-| Auth | No login on the dashboard, no authorisation on the API — including the endpoint that takes the show off air and hangs up on every caller |
+| Per-user auth | One shared password, so there is no "who rejected that caller". No rate limiting on guesses either — the length floor is the only defence |
 | One on-air slot | Accepting a second caller while one is live dials a busy host. Nothing prevents it; the outcome is reported honestly |
 | Caller names | Needs Caller ID Lookup on the number (paid, off by default) |
 | Blocking / favourites | No way to bar a repeat troll or flag a good caller. Needs E.164 normalisation back (it was removed with the blocklist) and somewhere durable to keep the list — a blocklist that empties on deploy is not a blocklist |

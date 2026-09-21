@@ -23,6 +23,12 @@
 
 export interface ReconnectingSocketOptions {
   url: string;
+  /**
+   * Sent as the WebSocket subprotocol list, which is how the token reaches the
+   * server: browsers cannot set headers on a WebSocket, and a token in the
+   * query string would be written to every access log on the way.
+   */
+  protocols?: string[];
   onMessage: (data: unknown) => void;
   onStatusChange?: (status: 'connecting' | 'open' | 'reconnecting' | 'closed') => void;
   /** Heartbeat cadence. Must be well under the server's idle timeout. */
@@ -50,7 +56,7 @@ export class ReconnectingSocket {
   private stallTimer: number | null = null;
 
   constructor(options: ReconnectingSocketOptions) {
-    this.options = { onStatusChange: () => {}, ...DEFAULTS, ...options };
+    this.options = { onStatusChange: () => {}, protocols: [], ...DEFAULTS, ...options };
   }
 
   connect(): void {
@@ -59,7 +65,7 @@ export class ReconnectingSocket {
 
     this.options.onStatusChange(this.attempt === 0 ? 'connecting' : 'reconnecting');
 
-    const socket = new WebSocket(this.options.url);
+    const socket = new WebSocket(this.options.url, this.options.protocols);
     this.socket = socket;
 
     socket.onopen = () => {

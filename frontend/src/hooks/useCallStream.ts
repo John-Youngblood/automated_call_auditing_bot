@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { ApiError, callsApi } from '../lib/api';
+import { readToken } from '../lib/auth';
 import { ReconnectingSocket, resolveWebSocketUrl } from '../lib/websocket';
 import type { Call, ConnectionStatus, ServerEvent } from '../types/events';
 import { isServerEvent, isTerminal } from '../types/events';
@@ -155,6 +156,12 @@ export function useCallStream(): UseCallStream {
   useEffect(() => {
     const socket = new ReconnectingSocket({
       url: resolveWebSocketUrl('/ws/frontend'),
+      // "bearer" first, then the token: the server checks this before
+      // accepting, so an expired session is refused at the handshake.
+      protocols: (() => {
+        const token = readToken();
+        return token ? ['bearer', token] : [];
+      })(),
       onMessage: (data) => {
         if (isServerEvent(data)) dispatch({ kind: 'event', event: data });
       },

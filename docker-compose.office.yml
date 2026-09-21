@@ -1,0 +1,68 @@
+# Running the screener on a machine in the office.
+#
+#   docker compose -f docker-compose.office.yml up -d --build
+#
+# Three containers and one job each:
+#
+#   nginx        serves the built dashboard to the office LAN, and proxies
+#                /api + /ws to the backend so the browser sees one origin
+#   backend      the service itself
+#   cloudflared  a tunnel, so Twilio can reach the backend from the internet
+#                without anyone opening a port on the office router
+#
+# The difference from docker-compose.yml: production images with the source
+# baked in, no bind-mounts, no reloader, and the tunnel runs as a container so
+# nobody has to install cloudflared on the host.
+#
+# The tunnel points at the *backend*, not at nginx. Twilio needs the webhooks
+# and nothing else; the dashboard stays on the LAN where it belongs.
+name: call-screener
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      # Published for `make simulate` and for reading logs from the host.
+      # Colleagues use the dashboard on ${FRONTEND_PORT} instead.
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2).status==200 else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    # `always`, not `unless-stopped`: this box gets rebooted and nobody is
+    # going to remember to start it again before a show.
+    restart: always
+
+  dashboard:
+    build:
+      context: ./frontend
+      target: prod
+    ports:
+      # 0.0.0.0 on purpose -- this is the one thing the office LAN reaches.
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+
+  # Gives Twilio a public HTTPS hostname without opening a port on the router.
+  # Needs CLOUDFLARE_TUNNEL_TOKEN in .env -- see docs/office.md. A *named*
+  # tunnel on purpose: its hostname never changes, so Twilio is configured
+  # once instead of after every restart.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env, or use `make tunnel` for a throwaway one}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always

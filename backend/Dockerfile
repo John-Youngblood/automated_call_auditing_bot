@@ -27,8 +27,11 @@ USER app
 EXPOSE 8000
 # Single worker on purpose: call state and the dashboard hub are in-process.
 # See docker-compose.yml and app/services/broadcaster.py before adding more.
-CMD ["uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", "--port", "8000", \
-     "--ws-ping-interval", "20", "--ws-ping-timeout", "20", \
-     "--timeout-graceful-shutdown", "10", \
-     "--no-server-header"]
+# Honours $PORT, which Cloud Run injects (8080) and compose does not set.
+# `exec` matters: without it uvicorn runs as a child of sh, which swallows
+# SIGTERM and turns every deploy into a hard kill on open websockets.
+CMD ["sh", "-c", "exec uvicorn app.main:app \
+     --host 0.0.0.0 --port ${PORT:-8000} \
+     --ws-ping-interval 20 --ws-ping-timeout 20 \
+     --timeout-graceful-shutdown 10 \
+     --no-server-header"]

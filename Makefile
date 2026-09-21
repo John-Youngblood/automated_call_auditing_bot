@@ -1,6 +1,6 @@
 # Convenience wrappers. Everything here is a one-liner you can also run by hand.
 .DEFAULT_GOAL := help
-.PHONY: help up down logs build install test lint fmt check simulate tunnel url clean
+.PHONY: help up down logs build install test lint fmt check simulate office office-down office-logs tunnel url clean
 
 BACKEND := backend
 FRONTEND := frontend
@@ -47,7 +47,20 @@ simulate: ## Place fake calls against a running backend (CALLS=3 SAY="...")
 	$(PY) $(BACKEND)/scripts/simulate_call.py \
 		--calls $(or $(CALLS),1) $(if $(SAY),--say "$(SAY)",)
 
-tunnel: ## Open a public tunnel for Twilio and point the app at it
+office: ## Run the office stack (built images + tunnel) -- see docs/office.md
+	docker compose -f docker-compose.office.yml up -d --build
+	@echo
+	@echo "  Dashboard on this machine: http://localhost:$${FRONTEND_PORT:-5173}"
+	@echo "  On the office network:     http://$$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $$1}'):$${FRONTEND_PORT:-5173}"
+	@echo
+
+office-down: ## Stop the office stack
+	docker compose -f docker-compose.office.yml down
+
+office-logs: ## Tail the office stack
+	docker compose -f docker-compose.office.yml logs -f
+
+tunnel: ## Open a throwaway public tunnel (dev; rotates on every restart)
 	./scripts/tunnel.sh
 
 url: ## Print the current public tunnel URL

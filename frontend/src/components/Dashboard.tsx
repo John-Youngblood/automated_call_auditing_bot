@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+import { sessionApi } from '../lib/api';
+
 import { useCallHistory } from '../hooks/useCallHistory';
 import { useToasts } from '../hooks/useToasts';
 import { useCallStream } from '../hooks/useCallStream';
@@ -15,6 +17,10 @@ import TranscriptPanel from './TranscriptPanel';
 
 type View = 'live' | 'history';
 
+interface Props {
+  onSignedOut: () => void;
+}
+
 /**
  * Dashboard shell. All state comes from hooks; this component arranges it.
  *
@@ -23,7 +29,7 @@ type View = 'live' | 'history';
  * queue keeps running in the background either way -- switching to history
  * does not disconnect the websocket, so nothing is missed.
  */
-export default function Dashboard() {
+export default function Dashboard({ onSignedOut }: Props) {
   const [view, setView] = useState<View>('live');
 
   const {
@@ -78,7 +84,18 @@ export default function Dashboard() {
           </button>
         </nav>
 
-        <ConnectionBadge status={connection} />
+        <div className="app__header-right">
+          <ConnectionBadge status={connection} />
+          <button
+            type="button"
+            className="app__signout"
+            onClick={() => {
+              void sessionApi.logOut().finally(onSignedOut);
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       {lastError && (

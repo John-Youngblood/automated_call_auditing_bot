@@ -901,6 +901,93 @@ h2 {
   color: var(--warning);
 }
 
+/* ----------------------------------------------------------------- login -- */
+.login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: 16px;
+  background: var(--brand-gradient);
+}
+
+.login__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(360px, 100%);
+  padding: 28px;
+  text-align: center;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 40px rgb(26 21 36 / 28%);
+}
+
+.login__logo {
+  width: 64px;
+  height: 64px;
+  align-self: center;
+  border-radius: 15px;
+}
+
+.login__title {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+
+.login__label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.login__input {
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.login__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.login__error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+  text-align: left;
+}
+
+/* Sits on the header gradient, so it carries its own contrast. */
+.app__header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.app__signout {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: rgb(255 255 255 / 80%);
+  background: transparent;
+  border: 1px solid rgb(255 255 255 / 26%);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.app__signout:hover {
+  color: #fff;
+  background: rgb(0 0 0 / 22%);
+}
+
 /* ---------------------------------------------------------------- toasts -- */
 /* Bottom-right and out of the way of the queue, which is what an operator is
    actually reading. Fixed rather than in flow: a confirmation must not push

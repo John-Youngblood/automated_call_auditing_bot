@@ -28,6 +28,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from app.api.auth import WS_PROTOCOL, SessionsDep, websocket_token
 from app.api.deps import BroadcasterDep, LineDep, RegistryDep, SettingsDep
 from app.config import Settings
 from app.schemas.calls import CallStatus
@@ -48,8 +49,20 @@ async def frontend_stream(
     registry: RegistryDep,
     line: LineDep,
     settings: SettingsDep,
+    sessions: SessionsDep,
 ) -> None:
-    await websocket.accept()
+    # Checked before accepting, so an unauthenticated client is refused at the
+    # handshake rather than connected and then dropped. The token arrives as a
+    # subprotocol because browsers cannot set headers on a WebSocket, and a
+    # token in the query string would land in every access log on the way.
+    token = websocket_token(websocket)
+    if not sessions.is_valid(token):
+        await websocket.close(code=1008, reason="sign in to the dashboard first")
+        return
+
+    # Echoing the subprotocol is required: a browser aborts the connection if
+    # it offered protocols and the server names none of them.
+    await websocket.accept(subprotocol=WS_PROTOCOL if token else None)
 
     async with broadcaster.subscribe(kind="dashboard") as subscriber:
         # Replay current state first. Without this, a dashboard opened

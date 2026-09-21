@@ -162,7 +162,11 @@ class TestHostNumberGuard:
         from app.config import get_settings
         from app.main import PLACEHOLDER_HOST_NUMBER, create_app
 
-        configure_env(APP_ENV="production", HOST_PHONE_NUMBER=PLACEHOLDER_HOST_NUMBER)
+        configure_env(
+            APP_ENV="production",
+            HOST_PHONE_NUMBER=PLACEHOLDER_HOST_NUMBER,
+            DASHBOARD_PASSWORD="a-long-enough-password",
+        )
         get_settings.cache_clear()
 
         with pytest.raises(RuntimeError, match="HOST_PHONE_NUMBER"), TestClient(create_app()):
@@ -184,12 +188,17 @@ class TestHostNumberGuard:
         from app.config import get_settings
         from app.main import create_app
 
-        configure_env(APP_ENV="production", HOST_PHONE_NUMBER="+15035551234",
-                      VALIDATE_WEBHOOK_SIGNATURE="true", TWILIO_AUTH_TOKEN="tok")
+        configure_env(
+            APP_ENV="production",
+            HOST_PHONE_NUMBER="+15035551234",
+            DASHBOARD_PASSWORD="a-long-enough-password",
+            VALIDATE_WEBHOOK_SIGNATURE="true",
+            TWILIO_AUTH_TOKEN="tok",
+        )
         get_settings.cache_clear()
 
         with TestClient(create_app()) as client:
-            assert client.get("/api/calls").status_code == 200
+            assert client.get("/healthz").status_code == 200
 
 
 class TestDialComplete:
