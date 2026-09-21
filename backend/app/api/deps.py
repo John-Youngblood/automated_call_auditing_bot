@@ -16,9 +16,7 @@ from fastapi import Depends
 from starlette.requests import HTTPConnection
 
 from app.config import Settings, get_settings
-from app.services.blocklist import BlocklistService
 from app.services.broadcaster import Broadcaster
-from app.services.call_history import CallHistoryRepository
 from app.services.call_registry import CallRegistry
 from app.telephony.provider_client import TelephonyClient
 
@@ -35,14 +33,6 @@ def provide_registry(conn: HTTPConnection) -> CallRegistry:
     return conn.app.state.registry
 
 
-def provide_blocklist(conn: HTTPConnection) -> BlocklistService:
-    return conn.app.state.blocklist
-
-
-def provide_history(conn: HTTPConnection) -> CallHistoryRepository:
-    return conn.app.state.history
-
-
 def provide_telephony(conn: HTTPConnection) -> TelephonyClient:
     return conn.app.state.telephony
 
@@ -50,6 +40,4 @@ def provide_telephony(conn: HTTPConnection) -> TelephonyClient:
 SettingsDep = Annotated[Settings, Depends(provide_settings)]
 BroadcasterDep = Annotated[Broadcaster, Depends(provide_broadcaster)]
 RegistryDep = Annotated[CallRegistry, Depends(provide_registry)]
-BlocklistDep = Annotated[BlocklistService, Depends(provide_blocklist)]
-HistoryDep = Annotated[CallHistoryRepository, Depends(provide_history)]
 TelephonyDep = Annotated[TelephonyClient, Depends(provide_telephony)]

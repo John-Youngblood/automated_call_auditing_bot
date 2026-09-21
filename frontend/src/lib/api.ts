@@ -8,12 +8,7 @@
  * open dashboard updates either way.
  */
 
-import type {
-  BlockedNumber,
-  BlockNumberResult,
-  Call,
-  CallHistoryEntry,
-} from '../types/events';
+import type { Call } from '../types/events';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -45,24 +40,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export const moderationApi = {
-  /**
-   * Block a caller. The server normalises the number, so the UI can pass
-   * whatever it has -- the provider's E.164 string or something a moderator
-   * typed -- without having to agree on a format first.
-   */
-  blockNumber: (number: string, options: { reason?: string; blockedBy?: string } = {}) =>
-    request<BlockNumberResult>('/api/block-number', {
-      method: 'POST',
-      body: JSON.stringify({ number, ...options }),
-    }),
-  listBlocked: () => request<BlockedNumber[]>('/api/blocked-numbers'),
-  history: (limit?: number) =>
-    request<CallHistoryEntry[]>(`/api/call-history${limit ? `?limit=${limit}` : ''}`),
-};
-
 export const callsApi = {
   list: () => request<Call[]>('/api/calls'),
+  /**
+   * Finished calls, newest first. Same `Call` shape as the live queue -- the
+   * server holds them in memory, so this list starts empty after a restart.
+   */
+  history: (limit?: number) =>
+    request<Call[]>(`/api/call-history${limit ? `?limit=${limit}` : ''}`),
   get: (callId: string) => request<Call>(`/api/calls/${encodeURIComponent(callId)}`),
   accept: (callId: string) =>
     request<Call>(`/api/calls/${encodeURIComponent(callId)}/accept`, { method: 'POST' }),

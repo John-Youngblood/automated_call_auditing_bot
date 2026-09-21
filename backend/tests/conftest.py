@@ -18,9 +18,6 @@ from app.main import create_app
 
 BASE_ENV = {
     "APP_ENV": "local",
-    # In-memory SQLite, so every test gets an empty blocklist and empty call
-    # history with no files to clean up between runs.
-    "DATABASE_URL": "sqlite+aiosqlite://",
     "LOG_LEVEL": "WARNING",
     "PUBLIC_BASE_URL": "https://calls.example.test",
     "VALIDATE_WEBHOOK_SIGNATURE": "false",

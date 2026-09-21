@@ -30,7 +30,7 @@ signature verification and outbound audio all assumed Twilio — so
 mattered, and the structure let that claim pass unnoticed.
 
 It's now honestly Twilio-only. The current design leans on `<Gather
-input="speech">` and `speechTimeout="auto"`, which have no direct equivalent
+input="speech">` and its `speechTimeout`, which have no direct equivalent
 elsewhere, so a second provider is a real port rather than a config change.
 If you do it, put signature verification and the TwiML/NCCO choice behind one
 adapter object you cannot partially implement, so a half-supported provider
@@ -46,7 +46,7 @@ transcript reconciliation, and a mock STT mode to develop against.
 
 All of it existed to answer one question: *has the caller stopped talking?*
 
-`speechTimeout="auto"` answers that question inside Twilio, for free. The
+`speechTimeout` answers that question inside Twilio, for free. The
 transcript then arrives complete in a single webhook — no partial state, no
 ordering to get right, no audio to buffer. Roughly 1,000 lines and two
 dependencies deleted, for a system that does the same job.
@@ -80,27 +80,30 @@ should jump to the present, not crawl through history.
 | Dashboard disconnects | Subscriber removed by the `subscribe()` context manager, even mid-send |
 | Low transcription confidence | Surfaced in the UI rather than hidden — the operator is making a decision from that text |
 
-## Moderation data flow
+## Where a call lives
 
 ```
-  ring ──▶ webhook ──▶ BlocklistService.is_blocked()   [in-memory set, no I/O]
-                            │
-                 blocked ───┼─── not blocked
-                            │            │
-                  <Reject>  │            ▼
-                  history   │      <Gather> → transcript → queue
-                            ▼
-                  (never answered, never billed)
+  ring ──▶ webhook ──▶ CallRegistry._calls   ──▶  is_open?
+                       (one dict, in memory)       │
+                                         yes ──────┼────── no
+                                          │                │
+                                  live queue          Call History
+                                  /api/calls          /api/call-history
+                                  WS snapshot         (newest first, capped)
 ```
 
-The blocklist is read while Twilio holds the caller waiting, so it's a cached
-set rather than a query. Loaded once at startup and updated on every write, so
-it cannot drift *within* a process — the same single-worker constraint the
-broadcaster and registry impose.
+One dict holds both. A call does not move or get copied when it finishes — it
+simply stops being `is_open`, and `TERMINAL_STATUSES` in `schemas/calls.py` is
+the single definition of which statuses mean that. The queue filter and the
+history view reading the same predicate is deliberate: they drifted apart once,
+and a resolved call stayed in the live queue as a result.
 
-`call_history` is written on terminal transitions only, which is why
-`CallRegistry.set_status` and `.end` are async while the rest of the class is
-sync: they fire once per call.
+`_prune_terminal` drops the oldest finished calls past `CALL_HISTORY_SIZE`.
+Nothing else evicts, so that cap is simultaneously the retention policy and the
+only thing bounding memory.
+
+Because nothing is persisted, every registry method is synchronous. They used
+to be async to await a SQLite write; with the write gone, so is the reason.
 
 ### Caller "location" is not a location
 
@@ -117,49 +120,37 @@ build routing or policy on it.
 rule exists in Python only; the dashboard renders `caller.location` verbatim
 rather than reimplementing it in TypeScript.
 
-### Two failure modes worth knowing
+### Why there is no database
 
-**Normalisation is the whole blocklist feature.** A blocklist that stores what
-the moderator typed and compares it against what the carrier sends will
-silently never match. Everything goes through `services/phone.py` on the way in
-and on the way to a comparison. If you need real carrier-grade parsing
-(extensions, short codes, arbitrary national formats), swap that module's body
-for `phonenumbers`; nothing else depends on how it works.
+There was one: SQLite via SQLAlchemy, holding a blocklist and a `call_history`
+table. Both are gone, and the lesson is worth keeping.
 
-**`create_all` is not a migration.** It creates missing tables and never
-alters existing ones. Dropping `transcript_line_count` from the model left the
-column in the database, still `NOT NULL` -- so every history insert failed the
-constraint. Because `CallHistoryRepository.record` deliberately swallows its
-errors (history is not worth failing a call teardown over), the app looked
-healthy while losing every row. Tests did not catch it: they build a fresh
-in-memory database per test, so the table always matches the models.
+The history table's only reader was a list of recent calls on one dashboard.
+For that, it cost an async driver, a session factory, a `UtcDateTime` type
+decorator (SQLite returns naive datetimes, which silently shifted every
+timestamp in the UI by the UTC offset), a schema-drift check at boot, and a
+volume in compose. It also produced the nastiest bug in this project's history:
+`create_all` never alters an existing table, so dropping a model column left a
+`NOT NULL` orphan that failed every insert — silently, because history writes
+were deliberately non-fatal, and invisibly to tests, which built a fresh
+database per test where the schema always matched.
 
-`Database.create_schema` now diffs live tables against the models at boot and
-raises `SchemaDriftError` on a leftover non-nullable column, naming the column
-and the fix. That converts silent data loss into a refusal to start.
-
-**SQLite has no timezone-aware datetime type.** `DateTime(timezone=True)` is a
-no-op there: aware values go in, naive ones come back, Pydantic serialises them
-with no offset, and the browser reads them as local time — shifting every entry
-in the moderation log by the UTC offset. The `UtcDateTime` type decorator in
-`db/models.py` normalises both directions; use it for any datetime column you
-add.
+Holding those calls in the registry instead costs one `sorted()` and a cap.
+The trade is that history resets on restart. That is a real loss and an
+acceptable one here; if it stops being acceptable, add storage back for that
+one feature deliberately, rather than because a scaffold arrived with it.
 
 ## Scaling out
 
-Deliberately one uvicorn worker: `CallRegistry`, `Broadcaster` and the
-blocklist cache are all in-process. When you outgrow it, in order:
+Deliberately one uvicorn worker: `CallRegistry` and `Broadcaster` are both
+in-process. When you outgrow it, in order:
 
 1. **Move the fan-out to Redis pub/sub.** Keep `Broadcaster`'s interface; have
    `publish` write to a channel and each process subscribe and forward into its
-   local queues. Publish block events on the same channel so the blocklist
-   caches stay in step — otherwise a number blocked on worker A keeps getting
-   through on worker B.
-2. **Move in-flight call state to Redis or Postgres.** `CallRegistry` is
-   already the only writer, so it's one class to reimplement. Finished calls
-   are already durable. Swap SQLite for Postgres at the same time — the models
-   are plain SQLAlchemy, but `create_all` is not a migration story, so add
-   Alembic before `call_history` holds anything you'd miss.
+   local queues.
+2. **Move call state to Redis.** `CallRegistry` is already the only writer, so
+   it's one class to reimplement, and doing so makes history shared across
+   workers and survive a restart in the same move.
 
 Note there is no sticky-routing requirement anymore. With no per-call
 websocket to the provider, any worker can serve any webhook — which makes
@@ -171,18 +162,15 @@ Currently suitable for a trusted network, not the public internet:
 
 - The dashboard has no authentication and the API has no authorisation. Anyone
   who can reach `/ws/frontend` hears every caller's business.
-- **Anyone who can reach the API can block any number.** `blockedBy` is
-  self-reported and worthless for audit, and nothing stops someone blocking
-  your most important callers. Put auth in front of `/api/block-number` before
-  this is reachable by anyone untrusted.
+- **Anyone who can reach the API can resolve any call.** Nothing stops an
+  unauthenticated request from rejecting a caller you wanted on air. Put auth
+  in front of `/api/calls` before this is reachable by anyone untrusted.
 - Webhook signature validation exists but is off by default. Turn it on before
   pointing a real number at this — note it covers *both* webhooks, because an
   unsigned post to `/webhook/speech-result` could put words in a caller's
   mouth.
 - Transcripts are personal data: a caller's number alongside whatever they
-  chose to say about themselves.
-  `call_history` persists them past restart, so retention is a decision you are
-  already making by default. Nothing here is encrypted at rest or deleted on a
-  schedule.
-- There is no unblock path. Deliberate for now (the confirmation copy says as
-  much), but a mistaken block needs a database edit.
+  chose to say about themselves. Nothing is written to disk, which limits the
+  exposure, but they do sit in memory for the last `CALL_HISTORY_SIZE` calls
+  and they reach every connected dashboard. `LOG_LEVEL=DEBUG` also writes their
+  text to container logs — deliberately not the default.

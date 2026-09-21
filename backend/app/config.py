@@ -57,19 +57,13 @@ class Settings(BaseSettings):
     #: up per operator rather than using one station number.
     agent_forward_number: str = "+15550000000"
 
-    # --- Moderation --------------------------------------------------------
-    #: Async driver on purpose -- a sync DB call would block the event loop
-    #: that is also pumping call audio.
-    database_url: str = "sqlite+aiosqlite:///./call_screener.db"
-    database_echo: bool = False
-
-    #: How a blocked caller is turned away. "rejected" plays a
-    #: not-accepting-calls treatment; "busy" returns a busy signal, which looks
-    #: like an ordinary failed call rather than a deliberate block.
-    blocked_call_reject_reason: Literal["rejected", "busy"] = "rejected"
-
-    #: Rows returned by the call-history view.
-    call_history_page_size: int = Field(default=100, ge=1, le=500)
+    # --- Call history ------------------------------------------------------
+    #: Finished calls kept in memory, and the default page size of the history
+    #: endpoint. One number because there is nowhere else for a call to live:
+    #: retaining more than is served, or serving more than is retained, would
+    #: both be fiction. History is lost on restart by design -- see
+    #: app.services.call_registry.
+    call_history_size: int = Field(default=200, ge=1, le=1000)
 
     # --- Dashboard fan-out -------------------------------------------------
     frontend_queue_max: int = Field(default=250, ge=1)

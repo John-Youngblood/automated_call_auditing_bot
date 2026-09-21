@@ -19,14 +19,6 @@ dist/
 .vite/
 *.tsbuildinfo
 
-# Local dev database (blocklist + call history). Never commit: it holds real
-# phone numbers and call transcripts.
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
-backend/data/
-
 # Current public tunnel hostname, written while tunnel.sh runs.
 .tunnel-url
 

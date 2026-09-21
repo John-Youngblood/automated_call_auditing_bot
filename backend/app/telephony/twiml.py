@@ -7,11 +7,10 @@ outbound audio all assumed Twilio -- so "multi-provider" was true of one file
 out of four and false everywhere it mattered. Supporting a second provider is
 a real project; pretending to support one is worse than not.
 
-Three documents, one per moment in a screened call:
+Two documents, one per moment in a screened call:
 
     answer_and_gather()  greet, then listen for why they are calling
     hold()               park them while an operator reads the transcript
-    reject()             refuse a blocked caller outright
 
 Built with ElementTree rather than f-strings: caller-supplied values end up in
 these documents, and string-built XML is an injection waiting to happen.
@@ -116,18 +115,3 @@ def hold(queue_name: str, action_url: str) -> RenderedResponse:
     enqueue.text = queue_name
     return _document(response)
 
-
-def reject(reason: str = "rejected") -> RenderedResponse:
-    """Refuse a blocked caller without answering.
-
-    The cheap path, and the reason it matters: Twilio never connects the call,
-    so there is no answered leg and no per-minute charge. Answering and then
-    hanging up would bill for the call.
-
-    ``reason`` is "rejected" (a not-accepting-calls treatment) or "busy" (a
-    busy signal). Busy is the quieter option -- it looks like an ordinary
-    failed call rather than a deliberate block.
-    """
-    response = Element("Response")
-    SubElement(response, "Reject", {"reason": reason})
-    return _document(response)

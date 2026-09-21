@@ -60,9 +60,6 @@ async def place_call(client: httpx.AsyncClient, base: str, reason: str, delay: f
     )
     answer.raise_for_status()
 
-    if "<Reject" in answer.text:
-        print(f"[{sid}] blocked at the carrier -- caller is on the blocklist")
-        return
     print(f"[{sid}] ringing from {number}, greeting playing")
 
     # Twilio would spend this time playing the greeting and listening.

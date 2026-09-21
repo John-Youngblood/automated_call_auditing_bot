@@ -2,12 +2,12 @@
 
 Everything so far has been the provider talking to us. This is the other
 direction -- telling the provider to do something to a call that is already in
-progress: bridge it to a human, or hang it up.
+progress: bridge it to a human, or decline it.
 
     dashboard decision  ->  TelephonyClient  ->  provider REST API  ->  caller
 
 **All of this is a placeholder.** The methods log exactly what they would send
-and report success, so the moderation flow can be exercised end to end without
+and report success, so the screening flow can be exercised end to end without
 credentials. Nothing reaches a carrier. Swap in :class:`TwilioRestClient` (or
 your own) once you have an account, and the call sites do not change.
 """
@@ -27,7 +27,7 @@ class TelephonyClient(Protocol):
     """Commands issued against a call that is already up.
 
     Implementations must not raise: every method returns a bool, because the
-    callers are moderation actions where a provider outage should be reported
+    callers are screening decisions where a provider outage should be reported
     to the operator, not turned into a 500.
     """
 
@@ -35,7 +35,6 @@ class TelephonyClient(Protocol):
     #: in logs and responses rather than implying a carrier was contacted.
     is_placeholder: bool
 
-    async def hangup(self, call_id: str, *, reason: str = "") -> bool: ...
     async def bridge(self, call_id: str, destination: str) -> bool: ...
     async def decline(self, call_id: str, *, message: str = "") -> bool: ...
 
@@ -51,31 +50,6 @@ class PlaceholderTelephonyClient:
 
     def __init__(self, settings: Settings) -> None:
         self._agent_number = settings.agent_forward_number
-
-    async def hangup(self, call_id: str, *, reason: str = "") -> bool:
-        """Terminate a live call.
-
-        Real implementation, Twilio::
-
-            # POST https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Calls/{call_id}.json
-            #   Status=completed
-            #
-            # from twilio.rest import Client
-            # Client(account_sid, auth_token).calls(call_id).update(status="completed")
-
-        Two things to handle when you make it real: the provider returns 404
-        for a call that already ended (treat that as success -- the goal was
-        "this call is not connected", and it is not), and the request is
-        network I/O that can time out, so give it a short timeout and report
-        the failure rather than hanging the moderator's click.
-        """
-        logger.warning(
-            "[PLACEHOLDER] would hang up call_id=%s via Twilio REST API (reason=%r) "
-            "-- no carrier was contacted",
-            call_id,
-            reason or "unspecified",
-        )
-        return True
 
     async def bridge(self, call_id: str, destination: str) -> bool:
         """Connect the call to a human.

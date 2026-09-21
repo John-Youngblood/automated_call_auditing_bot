@@ -13,17 +13,14 @@ export type CallStatus =
   | 'on-hold'
   | 'accepted'
   | 'rejected'
-  | 'ended'
-  /** Terminated because the caller is on the blocklist. */
-  | 'blocked';
+  /** The caller hung up, or the provider reported the call over. */
+  | 'ended';
 
-/** Statuses a call cannot leave. Such calls drop out of the live queue. */
-export const TERMINAL_STATUSES: readonly CallStatus[] = [
-  'accepted',
-  'rejected',
-  'ended',
-  'blocked',
-];
+/**
+ * Statuses a call cannot leave. Such calls drop out of the live queue and into
+ * Call History.
+ */
+export const TERMINAL_STATUSES: readonly CallStatus[] = ['accepted', 'rejected', 'ended'];
 
 export function isTerminal(status: CallStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
@@ -31,7 +28,10 @@ export function isTerminal(status: CallStatus): boolean {
 
 export interface Caller {
   number: string | null;
-  /** Saved contact name if there is one, else the carrier's caller ID. */
+  /**
+   * The carrier's caller-ID name, when Twilio sends one. Usually absent, and
+   * often generic ("WIRELESS CALLER") when present.
+   */
   name: string | null;
   /**
    * Where the *number* is registered, e.g. "Portland, OR" — already formatted
@@ -100,41 +100,3 @@ export function isServerEvent(value: unknown): value is ServerEvent {
   );
 }
 
-
-/** One finished call, as returned by `GET /api/call-history`. */
-export interface CallHistoryEntry {
-  callId: string;
-  fromNumber: string | null;
-  fromName: string | null;
-  fromLocation: string | null;
-  toNumber: string | null;
-  status: CallStatus;
-  startedAt: string;
-  endedAt: string | null;
-  durationSeconds: number | null;
-  transcriptSummary: string;
-  /** Whether this caller is already on the blocklist. */
-  isBlocked: boolean;
-}
-
-export interface BlockedNumber {
-  number: string;
-  originalInput: string | null;
-  reason: string | null;
-  blockedBy: string | null;
-  createdAt: string;
-}
-
-/**
- * Result of `POST /api/block-number`.
- *
- * The block and the hang-up are reported separately because they can fail
- * independently: the number goes on the list durably, but dropping a live
- * call is a request to a third party that may not land.
- */
-export interface BlockNumberResult {
-  blocked: BlockedNumber;
-  newlyBlocked: boolean;
-  terminatedCallIds: string[];
-  failedCallIds: string[];
-}

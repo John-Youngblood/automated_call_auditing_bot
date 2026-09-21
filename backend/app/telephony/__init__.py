@@ -5,6 +5,6 @@ the REST client for controlling a live call. Everything outside this package
 deals only in :mod:`app.schemas` types.
 """
 
-from app.telephony.twiml import RenderedResponse, answer_and_gather, hold, reject
+from app.telephony.twiml import RenderedResponse, answer_and_gather, hold
 
-__all__ = ["RenderedResponse", "answer_and_gather", "hold", "reject"]
+__all__ = ["RenderedResponse", "answer_and_gather", "hold"]

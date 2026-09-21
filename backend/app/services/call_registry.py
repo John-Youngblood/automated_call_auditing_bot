@@ -1,19 +1,17 @@
-"""Authoritative in-memory state for calls currently in the system.
+"""Authoritative state for calls, live and recently finished.
 
 Single writer of truth: every mutation goes through a method here, and every
 method publishes the matching event. Route handlers stay thin and no code path
 can change a call without the dashboards hearing about it.
 
-Persistence: in-flight calls live only in memory -- screening decisions are
-made within seconds, so losing them to a restart is acceptable. *Finished*
-calls are written to ``call_history`` as they reach a terminal status, which
-is what the moderation history view reads.
+Everything lives in memory. One dict holds both the calls being screened and
+the last :attr:`history_size` finished ones, which is what the Call History
+view reads -- so a finished call is not moved or copied anywhere, it simply
+stops being open. Nothing is written to disk.
 
-That write is the reason :meth:`CallRegistry.set_status` and
-:meth:`CallRegistry.end` are async while everything else here is sync: they
-fire once per call, well off the audio hot path, so awaiting a sub-millisecond
-SQLite write there is simpler and safer than a background queue that would
-swallow its own errors.
+That means history resets when the process restarts. Acceptable for a screening
+queue: decisions are made within seconds, a show runs for a couple of hours, and
+the alternative is a database whose only reader is a list of recent calls.
 """
 
 from __future__ import annotations
@@ -24,29 +22,21 @@ from datetime import UTC, datetime
 from app.schemas.calls import TERMINAL_STATUSES, Call, Caller, CallStatus
 from app.schemas.events import ServerEvent, ServerEventType
 from app.services.broadcaster import Broadcaster
-from app.services.call_history import CallHistoryRepository
-from app.services.phone import try_normalize
 
 logger = logging.getLogger(__name__)
 
 #: Terminal statuses reported to the dashboard as "this call is over" rather
 #: than "this call changed" -- everything except ACCEPTED, which is a handover.
-_ENDED_STATUSES = frozenset({CallStatus.REJECTED, CallStatus.ENDED, CallStatus.BLOCKED})
+_ENDED_STATUSES = frozenset({CallStatus.REJECTED, CallStatus.ENDED})
 
-#: Finished calls kept in memory for late lookups before being evicted. They
-#: are durable in ``call_history`` by then, so this only bounds RAM.
-_RETAINED_TERMINAL_CALLS = 50
+#: Finished calls kept when no size is configured.
+DEFAULT_HISTORY_SIZE = 200
 
 
 class CallRegistry:
-    def __init__(
-        self,
-        broadcaster: Broadcaster,
-        history: CallHistoryRepository | None = None,
-    ) -> None:
+    def __init__(self, broadcaster: Broadcaster, history_size: int = DEFAULT_HISTORY_SIZE) -> None:
         self._broadcaster = broadcaster
-        #: Optional so tests and tooling can build a registry with no database.
-        self._history = history
+        self._history_size = max(0, history_size)
         self._calls: dict[str, Call] = {}
 
     # -- reads --------------------------------------------------------------
@@ -65,6 +55,19 @@ class CallRegistry:
             (c for c in self._calls.values() if c.is_open),
             key=lambda c: c.started_at,
         )
+
+    def recent_calls(self, limit: int | None = None) -> list[Call]:
+        """Finished calls, newest first. The Call History view.
+
+        Bounded by ``history_size`` regardless of ``limit``: anything older has
+        already been evicted by :meth:`_prune_terminal`.
+        """
+        finished = sorted(
+            (c for c in self._calls.values() if not c.is_open),
+            key=lambda c: c.ended_at or c.started_at,
+            reverse=True,
+        )
+        return finished[:limit] if limit else finished
 
     def snapshot_event(self) -> ServerEvent:
         return ServerEvent.snapshot(self.open_calls())
@@ -92,7 +95,7 @@ class CallRegistry:
         self._publish(ServerEventType.CALL_INCOMING, call)
         return call
 
-    async def set_transcript(
+    def set_transcript(
         self, call_id: str, text: str, confidence: float | None = None
     ) -> Call | None:
         """Record what the caller said and move them to awaiting a decision.
@@ -121,7 +124,7 @@ class CallRegistry:
         self._publish(ServerEventType.CALL_UPDATED, call)
         return call
 
-    async def set_status(self, call_id: str, status: CallStatus) -> Call:
+    def set_status(self, call_id: str, status: CallStatus) -> Call:
         call = self.require(call_id)
         if call.status is status:
             return call
@@ -140,43 +143,26 @@ class CallRegistry:
         )
 
         self._publish(event, call)
-        await self._persist(call, status)
+        self._prune_terminal()
         return call
 
-    async def end(self, call_id: str) -> Call | None:
+    def end(self, call_id: str) -> Call | None:
         """Mark a call finished. Safe to call more than once."""
         call = self._calls.get(call_id)
         if call is None:
             return None
         if call.ended_at is None:
             call.ended_at = datetime.now(UTC)
-        # A call already resolved by a human or by the blocklist keeps that
-        # outcome -- the stream closing afterwards is a consequence of the
-        # decision, not a new one.
-        if call.status not in (CallStatus.ACCEPTED, CallStatus.REJECTED, CallStatus.BLOCKED):
+        # A call already resolved by a human keeps that outcome -- the caller
+        # hanging up afterwards is a consequence of the decision, not a new one.
+        if call.status not in (CallStatus.ACCEPTED, CallStatus.REJECTED):
             call.status = CallStatus.ENDED
         self._publish(ServerEventType.CALL_ENDED, call)
-        await self._persist(call, call.status)
+        self._prune_terminal()
         return call
 
-    def find_by_number(self, raw_number: str) -> list[Call]:
-        """Open calls from a given caller, normalised on both sides.
-
-        Used when a moderator blocks a number mid-show: the block has to reach
-        whatever that caller has in flight right now, and the number they
-        typed will not match the provider's formatting byte for byte.
-        """
-        target = try_normalize(raw_number)
-        if target is None:
-            return []
-        return [
-            call
-            for call in self._calls.values()
-            if call.is_open and try_normalize(call.caller.number) == target
-        ]
-
     def forget(self, call_id: str) -> None:
-        """Evict a finished call from memory (call from a reaper task)."""
+        """Evict a call from memory."""
         self._calls.pop(call_id, None)
 
     def publish(self, event: ServerEvent) -> None:
@@ -185,31 +171,18 @@ class CallRegistry:
         self._broadcaster.publish(event.to_wire())
 
     # -- internals ----------------------------------------------------------
-    async def _persist(self, call: Call, status: CallStatus) -> None:
-        """Write the call to history once it is finished.
-
-        Upserts on call id, so a call that is rejected and then confirmed
-        ended by the provider's status callback updates one row rather than
-        creating two.
-        """
-        if status not in TERMINAL_STATUSES:
-            return
-        if self._history is not None:
-            await self._history.record(call)
-        self._prune_terminal()
-
     def _prune_terminal(self) -> None:
-        """Drop the oldest finished calls from memory.
+        """Drop the oldest finished calls.
 
-        Without this, ``_calls`` grows for the life of the process: nothing
-        else removes an entry. Safe because anything evicted has already been
-        written to ``call_history``.
+        This is the only thing bounding memory, and it is also what makes
+        ``history_size`` the real retention limit: nothing else removes an
+        entry, so without it ``_calls`` would grow for the life of the process.
         """
         finished = sorted(
             (call for call in self._calls.values() if not call.is_open),
             key=lambda call: call.ended_at or call.started_at,
         )
-        for call in finished[: max(0, len(finished) - _RETAINED_TERMINAL_CALLS)]:
+        for call in finished[: max(0, len(finished) - self._history_size)]:
             self.forget(call.call_id)
 
     def _publish(self, event_type: ServerEventType, call: Call) -> None:

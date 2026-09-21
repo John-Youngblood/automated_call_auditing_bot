@@ -7,7 +7,6 @@ pydantic-settings>=2.4,<3.0
 httpx>=0.27,<1.0
 python-multipart>=0.0.9,<1.0       # Twilio posts application/x-www-form-urlencoded
 
-# Persistence for the blocklist and call history. Async driver so a database
-# call cannot stall the event loop serving dashboard sockets and webhooks.
-sqlalchemy[asyncio]>=2.0,<3.0
-aiosqlite>=0.20,<1.0
+# No database: call state and recent history live in memory. See
+# app/services/call_registry.py for what that costs you (a restart clears the
+# history view) and why it is the right trade here.

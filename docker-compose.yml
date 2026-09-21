@@ -19,10 +19,6 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       PYTHONDONTWRITEBYTECODE: "1"
-      # Absolute path onto the named volume below. Without this the SQLite file
-      # lands on the container's writable layer and a rebuild silently empties
-      # the blocklist -- unblocking every caller a moderator ever blocked.
-      DATABASE_URL: sqlite+aiosqlite:////srv/data/call_screener.db
     ports:
       # Override in .env if the host port is taken.
       - "${BACKEND_PORT:-8000}:8000"
@@ -30,12 +26,11 @@ services:
       # Source only. .venv / site-packages live in the image, not the mount.
       - ./backend/app:/srv/app
       - ./backend/tests:/srv/tests
-      # Blocklist and call history survive `docker compose down` and rebuilds.
-      - call-screener-data:/srv/data
-    # Deliberately ONE worker. Call state and the dashboard fan-out hub are
-    # in-process, so a second worker would see a different set of calls. To
-    # scale horizontally, move the hub onto Redis pub/sub first (see
-    # app/services/broadcaster.py).
+    # Deliberately ONE worker, and the service keeps nothing on disk. Call
+    # state, recent history and the dashboard fan-out hub are all in-process,
+    # so a second worker would see a different set of calls and a restart
+    # starts empty. To scale horizontally, move the hub onto Redis pub/sub
+    # first (see app/services/broadcaster.py).
     command: >
       uvicorn app.main:app
       --host 0.0.0.0
@@ -78,8 +73,3 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-
-volumes:
-  # Moderation state. Removed only by `docker compose down -v`, which is the
-  # one command that will wipe the blocklist.
-  call-screener-data:

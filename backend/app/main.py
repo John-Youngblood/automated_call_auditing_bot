@@ -19,12 +19,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import calls, frontend, health, moderation, webhooks
+from app.api.routes import calls, frontend, health, webhooks
 from app.config import Settings, get_settings
-from app.db.session import Database
-from app.services.blocklist import BlocklistService
 from app.services.broadcaster import Broadcaster
-from app.services.call_history import CallHistoryRepository
 from app.services.call_registry import CallRegistry
 from app.telephony.provider_client import create_telephony_client
 
@@ -35,8 +32,8 @@ def configure_logging(level: str) -> None:
     """Apply LOG_LEVEL to this application only.
 
     The root logger stays at WARNING deliberately. Setting it to the
-    configured level would make LOG_LEVEL=DEBUG unusable -- asyncio, aiosqlite
-    and httpx would bury our own lines in per-query and per-socket chatter.
+    configured level would make LOG_LEVEL=DEBUG unusable -- asyncio, uvicorn
+    and httpx would bury our own lines in per-socket chatter.
     """
     logging.basicConfig(
         level=logging.WARNING,
@@ -53,34 +50,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     log = logging.getLogger(__name__)
 
-    database = Database(settings.database_url, echo=settings.database_echo)
-    await database.create_schema()
-    app.state.database = database
-
-    history = CallHistoryRepository(database)
-    app.state.history = history
-
-    # Loaded up front so the inbound-call webhook can consult it from memory
-    # rather than hitting the database while a caller waits.
-    blocklist = BlocklistService(database)
-    await blocklist.load()
-    app.state.blocklist = blocklist
-
     app.state.telephony = create_telephony_client(settings)
 
     broadcaster = Broadcaster(queue_max=settings.frontend_queue_max)
     app.state.broadcaster = broadcaster
-    app.state.registry = CallRegistry(broadcaster=broadcaster, history=history)
+    app.state.registry = CallRegistry(
+        broadcaster=broadcaster,
+        history_size=settings.call_history_size,
+    )
 
     log.info(
-        "call screener up env=%s blocked=%s public=%s",
+        "call screener up env=%s public=%s",
         settings.app_env,
-        blocklist.size,
         settings.public_base_url,
     )
     if app.state.telephony.is_placeholder:
         log.warning(
-            "telephony REST client is a PLACEHOLDER -- accept/reject/block will not "
+            "telephony REST client is a PLACEHOLDER -- accept/reject will not "
             "actually control calls at the carrier"
         )
     if settings.app_env != "local" and not settings.validate_webhook_signature:
@@ -94,7 +80,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Release dashboards before the server stops accepting, so clients see
         # a clean close and reconnect rather than a timeout.
         broadcaster.close_all()
-        await database.dispose()
         log.info("call screener shutting down")
 
 
@@ -122,7 +107,6 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(webhooks.router)
     app.include_router(calls.router)
-    app.include_router(moderation.router)
     app.include_router(frontend.router)
 
     # Serves the greeting MP3 when GREETING_AUDIO_URL is unset. Fine for local

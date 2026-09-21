@@ -34,25 +34,19 @@ class CallStatus(StrEnum):
     ACCEPTED = "accepted"
     #: A human declined the call.
     REJECTED = "rejected"
-    #: Provider hung up / stream closed.
+    #: The caller hung up, or the provider reported the call over.
     ENDED = "ended"
-    #: Terminated because the caller is on the blocklist. Distinct from
-    #: REJECTED on purpose: moderators need to tell "we turned them away this
-    #: time" apart from "this number is barred", and repeat attempts by a
-    #: blocked caller are exactly the signal worth seeing in history.
-    BLOCKED = "blocked"
 
 
-#: Statuses a call cannot leave. Defined once here so the registry, the queue
-#: filter and the history writer cannot drift apart -- they did, and a blocked
-#: call stayed in the live queue as a result.
+#: Statuses a call cannot leave. Defined once here so the queue filter and the
+#: history view cannot drift apart -- they did once, and a resolved call stayed
+#: in the live queue as a result.
 #: Mirrored in frontend/src/types/events.ts.
 TERMINAL_STATUSES = frozenset(
     {
         CallStatus.ACCEPTED,
         CallStatus.REJECTED,
         CallStatus.ENDED,
-        CallStatus.BLOCKED,
     }
 )
 

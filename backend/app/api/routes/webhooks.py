@@ -6,11 +6,7 @@
 
 The flow:
 
-    ring ──▶ blocklist?  ── yes ──▶ <Reject>            (never answered, never billed)
-              │
-              no
-              ▼
-         <Gather input="speech"> greeting plays, Twilio listens
+    ring ──▶ <Gather input="speech"> greeting plays, Twilio listens
               │
               │  caller stops talking; Twilio detects it and posts the text
               ▼
@@ -31,15 +27,14 @@ from __future__ import annotations
 import contextlib
 import logging
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from app.api.deps import BlocklistDep, HistoryDep, RegistryDep, SettingsDep
-from app.schemas.calls import Call, Caller, CallStatus
+from app.api.deps import RegistryDep, SettingsDep
+from app.schemas.calls import Caller
 from app.services.phone import format_location
-from app.telephony import RenderedResponse, answer_and_gather, hold, reject
+from app.telephony import RenderedResponse, answer_and_gather, hold
 from app.telephony.signature import verify_twilio_signature
 
 logger = logging.getLogger(__name__)
@@ -109,8 +104,6 @@ async def incoming_call(
     request: Request,
     registry: RegistryDep,
     settings: SettingsDep,
-    blocklist: BlocklistDep,
-    history: HistoryDep,
 ) -> Response:
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -134,11 +127,6 @@ async def incoming_call(
             params.get("FromCountry"),
         ),
     )
-
-    # Blocklist first, before anything expensive. An in-memory set lookup, so
-    # the caller is not kept waiting on a disk read while the phone rings.
-    if blocklist.is_blocked(caller.number):
-        return await _refuse_blocked_call(call_id, caller, params.get("To"), settings, history)
 
     registry.register_incoming(call_id, caller=caller, to_number=params.get("To"))
     logger.info("call screening call_id=%s from=%s", call_id, caller.number)
@@ -185,7 +173,7 @@ async def speech_result(
     if not text:
         logger.info("no speech detected call_id=%s", call_id)
 
-    await registry.set_transcript(call_id, text, confidence)
+    registry.set_transcript(call_id, text, confidence)
 
     # Hold them. The call stays open until an operator accepts, rejects, or
     # the caller hangs up.
@@ -227,7 +215,7 @@ async def queue_exit(
 
     if call_id and result in ABANDONED_QUEUE_RESULTS:
         logger.info("caller left the queue call_id=%s result=%s after=%ss", call_id, result, waited)
-        await registry.end(call_id)
+        registry.end(call_id)
     else:
         logger.info("queue exit call_id=%s result=%s after=%ss", call_id, result, waited)
 
@@ -267,35 +255,6 @@ async def call_status(request: Request, registry: RegistryDep) -> Response:
     call_id = params.get("CallSid")
     state = params.get("CallStatus", "unknown")
     if call_id and state in TERMINAL_CALL_STATUSES:
-        await registry.end(call_id)
+        registry.end(call_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-
-async def _refuse_blocked_call(
-    call_id: str,
-    caller: Caller,
-    to_number: str | None,
-    settings: SettingsDep,
-    history: HistoryDep,
-) -> Response:
-    """Turn a blocked caller away and leave a trace of the attempt.
-
-    Deliberately does **not** register the call: it never rings on anyone's
-    dashboard, which is the point of a blocklist. It goes straight to history
-    instead, because repeat attempts by a blocked number are exactly what a
-    moderator wants to see later -- a block that silently swallows evidence of
-    harassment is worse than no record at all.
-    """
-    now = datetime.now(UTC)
-    await history.record(
-        Call(
-            call_id=call_id,
-            status=CallStatus.BLOCKED,
-            caller=caller,
-            to_number=to_number,
-            started_at=now,
-            ended_at=now,
-        )
-    )
-    logger.info("refused blocked caller call_id=%s from=%s", call_id, caller.number)
-    return _twiml(reject(settings.blocked_call_reject_reason))

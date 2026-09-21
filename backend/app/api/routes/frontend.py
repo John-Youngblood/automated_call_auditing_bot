@@ -118,7 +118,7 @@ async def _dispatch(command: ClientCommand, websocket: WebSocket, registry: Call
                 return
             accepting = command.type is ClientCommandType.ACCEPT_CALL
             try:
-                await registry.set_status(
+                registry.set_status(
                     command.call_id,
                     CallStatus.ACCEPTED if accepting else CallStatus.REJECTED,
                 )

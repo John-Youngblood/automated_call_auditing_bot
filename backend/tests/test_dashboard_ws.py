@@ -157,19 +157,30 @@ def test_accepted_call_leaves_the_live_queue(client: TestClient) -> None:
     assert client.get(f"/api/calls/{INCOMING['CallSid']}").json()["status"] == "accepted"
 
 
-def test_finished_calls_do_not_accumulate_in_memory(client: TestClient) -> None:
-    """Nothing else evicts from the in-memory registry, so a long-running
-    process would hold every call it ever saw."""
-    from app.services.call_registry import _RETAINED_TERMINAL_CALLS
+def test_history_is_bounded_and_newest_first(make_client) -> None:
+    """The history cap is the only thing bounding memory: nothing else evicts,
+    so a long-running process would otherwise hold every call it ever saw."""
+    cap = 5
+    client = make_client(CALL_HISTORY_SIZE=str(cap))
+    with client:
+        for n in range(cap + 3):
+            call_id = f"CA-bulk-{n}"
+            client.post("/webhook/incoming-call", data={**INCOMING, "CallSid": call_id})
+            client.post(f"/api/calls/{call_id}/reject")
 
-    overflow = _RETAINED_TERMINAL_CALLS + 10
-    for n in range(overflow):
-        call_id = f"CA-bulk-{n}"
-        client.post("/webhook/incoming-call", data={**INCOMING, "CallSid": call_id})
-        client.post(f"/api/calls/{call_id}/reject")
+        history = client.get("/api/call-history", params={"limit": 500}).json()
 
-    # Oldest evicted from memory...
+    # Capped, newest first, and the overflow is gone rather than merely hidden.
+    assert [c["callId"] for c in history] == [f"CA-bulk-{n}" for n in range(7, 2, -1)]
     assert client.get("/api/calls/CA-bulk-0").status_code == 404
-    # ...but still durable in history, which is what the moderator reads.
-    history = client.get("/api/call-history", params={"limit": 500}).json()
-    assert len(history) == overflow
+
+
+def test_history_holds_only_finished_calls(client: TestClient) -> None:
+    client.post("/webhook/incoming-call", data=INCOMING)
+    assert client.get("/api/call-history").json() == []
+
+    client.post(f"/api/calls/{INCOMING['CallSid']}/reject")
+
+    history = client.get("/api/call-history").json()
+    assert [c["callId"] for c in history] == [INCOMING["CallSid"]]
+    assert history[0]["status"] == "rejected"

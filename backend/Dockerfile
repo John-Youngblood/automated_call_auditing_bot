@@ -8,11 +8,6 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /srv
 RUN groupadd --system app && useradd --system --gid app --no-create-home app
-# The data directory must exist in the image and be owned by the runtime
-# user: Docker seeds a fresh named volume from the image path, so a
-# directory created only at mount time would land root-owned and the
-# unprivileged process could not write the database.
-RUN mkdir -p /srv/data && chown app:app /srv/data
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 

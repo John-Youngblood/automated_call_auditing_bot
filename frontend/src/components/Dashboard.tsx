@@ -1,15 +1,12 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 
-import { useBlockNumber } from '../hooks/useBlockNumber';
 import { useCallHistory } from '../hooks/useCallHistory';
 import { useCallStream } from '../hooks/useCallStream';
 import { useNow } from '../hooks/useNow';
 import { formatClock, formatElapsed, formatPhoneNumber, statusLabel } from '../lib/format';
-import type { Call, CallHistoryEntry } from '../types/events';
 import CallActions from './CallActions';
 import CallHistoryView from './CallHistoryView';
 import CallQueue from './CallQueue';
-import ConfirmDialog from './ConfirmDialog';
 import ConnectionBadge from './ConnectionBadge';
 import TranscriptPanel from './TranscriptPanel';
 
@@ -45,37 +42,12 @@ export default function Dashboard() {
   // Only fetch history while that view is open; the queue is the hot path.
   const history = useCallHistory(endedCount, view === 'history');
 
-  const block = useBlockNumber(history.refresh);
-
-  const requestBlockFromCall = useCallback(
-    (call: Call) => {
-      if (!call.caller.number) return;
-      block.request({
-        number: call.caller.number,
-        label: call.caller.name ?? formatPhoneNumber(call.caller.number),
-        callId: call.callId,
-      });
-    },
-    [block],
-  );
-
-  const requestBlockFromHistory = useCallback(
-    (entry: CallHistoryEntry) => {
-      if (!entry.fromNumber) return;
-      block.request({
-        number: entry.fromNumber,
-        label: entry.fromName ?? formatPhoneNumber(entry.fromNumber),
-      });
-    },
-    [block],
-  );
-
   return (
     <div className="app">
       <header className="app__header">
         <div className="app__brand">
           <h1>Call Screener</h1>
-          <p>Call screening and moderation</p>
+          <p>Live call screening</p>
         </div>
 
         <nav className="tabs" aria-label="Views">
@@ -105,15 +77,6 @@ export default function Dashboard() {
         <div className="alert" role="alert">
           <span>{lastError}</span>
           <button type="button" className="alert__dismiss" onClick={dismissError}>
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {block.lastResult && (
-        <div className="alert alert--success" role="status">
-          <span>{describeBlockResult(block.lastResult)}</span>
-          <button type="button" className="alert__dismiss" onClick={block.clearResult}>
             Dismiss
           </button>
         </div>
@@ -179,7 +142,6 @@ export default function Dashboard() {
                   pending={pendingCallId === selectedCall.callId}
                   onAccept={acceptCall}
                   onReject={rejectCall}
-                  onBlock={requestBlockFromCall}
                 />
               </>
             )}
@@ -188,59 +150,14 @@ export default function Dashboard() {
       ) : (
         <main className="app__body app__body--single">
           <CallHistoryView
-            entries={history.entries}
+            calls={history.calls}
             loading={history.loading}
             error={history.error}
             onRefresh={history.refresh}
-            onBlock={requestBlockFromHistory}
           />
         </main>
       )}
-
-      <ConfirmDialog
-        open={block.target !== null}
-        title="Block this caller?"
-        message={
-          <>
-            <p>
-              Are you sure you want to block <strong>{block.target?.label}</strong>?
-            </p>
-            <p className="dialog__detail">
-              {block.target?.callId
-                ? 'Their call will be hung up immediately and future calls will be refused before they ring.'
-                : 'Future calls from this number will be refused before they ring.'}{' '}
-              This cannot be undone from the dashboard.
-            </p>
-          </>
-        }
-        confirmLabel="Block caller"
-        destructive
-        pending={block.pending}
-        error={block.error}
-        onConfirm={block.confirm}
-        onCancel={block.cancel}
-      />
     </div>
   );
 }
 
-function describeBlockResult(result: {
-  blocked: { number: string };
-  newlyBlocked: boolean;
-  terminatedCallIds: string[];
-  failedCallIds: string[];
-}): string {
-  const number = formatPhoneNumber(result.blocked.number);
-  // Report the hang-up separately from the block: they fail independently, and
-  // "blocked" without "dropped" would let a moderator assume the caller is
-  // gone when they are still connected.
-  if (result.failedCallIds.length > 0) {
-    return `${number} was blocked, but their live call could not be hung up. Check the call manually.`;
-  }
-  if (result.terminatedCallIds.length > 0) {
-    return `${number} was blocked and their live call was dropped.`;
-  }
-  return result.newlyBlocked
-    ? `${number} was blocked. Future calls will be refused.`
-    : `${number} was already blocked.`;
-}

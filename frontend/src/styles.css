@@ -12,9 +12,6 @@
   --success: #17803d;
   --success-soft: #e6f5ec;
   --danger: #c0272d;
-  /* Blocking outranks rejecting: rejecting turns away one call, blocking bars
-     every future one. A deeper red says that before the confirmation does. */
-  --danger-deep: #8c1216;
   --danger-soft: #fdecec;
   --warning: #9a6200;
   --warning-soft: #fdf3e2;
@@ -36,7 +33,6 @@
     --success: #4ecb79;
     --success-soft: #16251c;
     --danger: #ff7a7a;
-    --danger-deep: #c4302f;
     --danger-soft: #2a1718;
     --warning: #e0a63c;
     --warning-soft: #2a2115;
@@ -423,15 +419,8 @@ h2 {
   width: 100%;
 }
 
-.actions__rule {
-  width: 100%;
-  margin: 2px 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-}
-
-/* A resolved call has only the status and a late Block, which read better
-   side by side than stacked. */
+/* A resolved call shows only its outcome and a one-line explanation, which
+   read better side by side than stacked. */
 .actions--resolved {
   flex-direction: row;
   align-items: center;
@@ -769,6 +758,17 @@ h2 {
   color: var(--text-muted);
 }
 
+/* The server sends the whole transcript -- the same string the queue shows --
+   so the clamp happens here. A rambling caller must not stretch one row tall
+   enough to push the rest of the table off screen. */
+.history__transcript span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
 .history__no-transcript {
   display: block;
   font-size: 12px;
@@ -777,81 +777,7 @@ h2 {
   opacity: 0.75;
 }
 
-.history__actions {
-  text-align: right;
-  white-space: nowrap;
-}
-
-/* ---------------------------------------------------------------- dialog -- */
-.dialog {
-  max-width: min(440px, calc(100vw - 32px));
-  padding: 0;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgb(16 24 40 / 22%);
-}
-
-.dialog::backdrop {
-  background: rgb(8 10 14 / 55%);
-  backdrop-filter: blur(2px);
-}
-
-.dialog__body {
-  padding: 20px 22px 18px;
-}
-
-.dialog__title {
-  margin: 0 0 10px;
-  font-size: 17px;
-}
-
-.dialog__message p {
-  margin: 0 0 8px;
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.dialog__detail {
-  color: var(--text-muted);
-  font-size: 13px !important;
-}
-
-.dialog__error {
-  margin: 12px 0 0;
-  padding: 9px 12px;
-  font-size: 13px;
-  color: var(--danger);
-  background: var(--danger-soft);
-  border-radius: 6px;
-}
-
-.dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 20px;
-}
-
-.dialog__actions .button {
-  flex: 0 0 auto;
-}
-
 /* --------------------------------------------------------- button variants */
-/* Used by all three Block affordances -- the live call, the history row, and
-   the confirmation dialog -- so they read as one action wherever they appear. */
-.button--danger {
-  background: var(--danger-deep);
-}
-
-/* Block is not a peer of Accept/Reject: it affects every future call, not
-   just this one. The rule above it and the deeper red both say so, and the
-   separation puts it out of reach of a reflex click. */
-.button--block {
-  margin-top: 0;
-}
-
 .button--ghost {
   color: var(--text);
   background: transparent;
@@ -867,21 +793,6 @@ h2 {
   flex: 0 0 auto;
   padding: 6px 13px;
   font-size: 13px;
-}
-
-.actions__late-block {
-  margin-left: auto;
-}
-
-/* --------------------------------------------------------- blocked status */
-.status--blocked {
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.alert--success {
-  color: var(--success);
-  background: var(--success-soft);
 }
 
 /* Visually hidden but available to screen readers. */

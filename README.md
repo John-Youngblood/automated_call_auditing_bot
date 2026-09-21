@@ -2,7 +2,7 @@
 
 Screens inbound phone calls. A caller is greeted, asked why they're calling,
 and put on hold; their transcribed reason appears on a dashboard where an
-operator accepts, rejects, or blocks them.
+operator accepts or rejects them.
 
 ```
    caller
@@ -13,9 +13,9 @@ operator accepts, rejects, or blocks them.
 │  Twilio  │ ◀────────────────────────────── │      FastAPI        │
 │          │   <Gather input="speech">       │                     │
 │          │                                 │  ┌───────────────┐  │
-│  greeting plays, Twilio listens,           │  │   blocklist   │  │
-│  detects when the caller stops             │  │  call history │  │
-│          │                                 │  │   (SQLite)    │  │
+│  greeting plays, Twilio listens,           │  │ CallRegistry  │  │
+│  detects when the caller stops             │  │ queue+history │  │
+│          │                                 │  │  (in memory)  │  │
 │          │  POST /webhook/speech-result    │  └───────┬───────┘  │
 │          │ ──────────────────────────────▶ │          │          │
 │          │ ◀────────────────────────────── │          │          │
@@ -34,6 +34,10 @@ which is why this service handles no audio at all. No media streaming, no
 speech-to-text integration, no audio buffering. The transcript arrives complete
 in one webhook.
 
+**Nothing is stored on disk.** There is no database. Calls being screened and
+the last few hundred finished ones live in one in-memory registry, so a restart
+starts with an empty history — see [Call history](#call-history).
+
 ## Quick start
 
 ```bash
@@ -51,8 +55,8 @@ make simulate CALLS=3
 make simulate SAY="I have a question for your guest"   # pick the words
 ```
 
-Each appears in the queue with its transcript, and Accept / Reject / Block
-resolve them.
+Each appears in the queue with its transcript, and Accept / Reject resolve
+them.
 
 > If port 5173 or 8000 is taken, set `FRONTEND_PORT` / `BACKEND_PORT` in `.env`.
 
@@ -80,10 +84,6 @@ Four details that matter:
   connection to this service while a caller holds, so without it a caller who
   gives up leaves no trace. Twilio posts `QueueResult=hangup` and `QueueTime`.
 
-A blocked caller never gets past step 1: they're refused with `<Reject>`, which
-drops the call before it's answered, so there's no answered leg and no
-per-minute charge.
-
 ## Layout
 
 ```
@@ -96,66 +96,44 @@ per-minute charge.
 │   │   ├── main.py           # composition root
 │   │   ├── config.py         # typed settings, the only reader of the environment
 │   │   ├── api/routes/
-│   │   │   ├── webhooks.py       # the three Twilio webhooks
-│   │   │   ├── calls.py          # accept / reject
-│   │   │   ├── moderation.py     # block-number / call-history
+│   │   │   ├── webhooks.py       # the four Twilio webhooks
+│   │   │   ├── calls.py          # accept / reject / call-history
 │   │   │   ├── frontend.py       # WS /ws/frontend
 │   │   │   └── health.py
 │   │   ├── services/
-│   │   │   ├── call_registry.py  # single writer of call state
+│   │   │   ├── call_registry.py  # single writer of call state, live + recent
 │   │   │   ├── broadcaster.py    # bounded-queue fan-out to dashboards
-│   │   │   ├── blocklist.py      # cached blocklist, read on every ring
-│   │   │   ├── call_history.py   # durable record of finished calls
-│   │   │   └── phone.py          # E.164 normalisation
-│   │   ├── db/                   # SQLAlchemy models + async session
+│   │   │   └── phone.py          # caller location labels
 │   │   └── telephony/            # Twilio-specific code, all of it
-│   │       ├── twiml.py              # the three XML documents
+│   │       ├── twiml.py              # the two XML documents
 │   │       ├── signature.py          # webhook authenticity
-│   │       └── provider_client.py    # REST control: hangup / bridge (stub)
+│   │       └── provider_client.py    # REST control: bridge / decline (stub)
 │   ├── scripts/simulate_call.py  # fake calls, no phone needed
 │   └── tests/
 └── frontend/src/
     ├── components/           # presentational only
     ├── hooks/
     │   ├── useCallStream.ts      # one socket, one reducer
-    │   ├── useCallHistory.ts     # history is a plain HTTP read
-    │   └── useBlockNumber.ts     # the block flow, shared by both views
+    │   └── useCallHistory.ts     # history is a plain HTTP read
     └── types/events.ts       # mirrors backend/app/schemas/events.py
 ```
 
-## Moderation
+## Call history
 
-### Blocking
+`GET /api/call-history` returns finished calls newest-first — accepted,
+rejected and dropped. It reads straight out of `CallRegistry`, which keeps the
+last `CALL_HISTORY_SIZE` (default 200) alongside the live ones, so it serves
+the same `Call` shape as the queue: one wire type for a call wherever it
+appears.
 
-`POST /api/block-number` does two things that must not be confused:
+The dashboard shows it in a separate tab from the live queue: the queue is a
+work surface where seconds matter, history is a record read at leisure.
 
-1. adds the number to `blocked_numbers`, so **future** calls are refused at the
-   webhook; and
-2. hangs up whatever that caller has in flight **right now**, via Twilio's REST
-   API.
-
-The first is durable and cheap. The second is a request to a third party and
-can fail, so the response reports them separately — `terminatedCallIds` vs
-`failedCallIds` — and the dashboard says "blocked, but we could not drop the
-live call" rather than letting silence imply success.
-
-Blocked attempts are still written to `call_history`. A block that hides
-evidence of repeat harassment is worse than no record at all.
-
-**Numbers are normalised before anything compares them.** `+1 (555) 019-2834`,
-`555-019-2834` and `+15550192834` all reach the same key — see
-[phone.py](backend/app/services/phone.py). This is the detail the whole feature
-rests on: get it wrong and blocking silently does nothing.
-
-### Call history
-
-`GET /api/call-history` returns finished calls newest-first — completed,
-rejected, dropped and blocked — each with a transcript summary. The dashboard
-shows it in a separate tab from the live queue: the queue is a work surface
-where seconds matter, history is a record read at leisure.
-
-Every history row carries a Block action, because by the time you decide
-someone needs blocking the call is usually already over.
+**It is in memory, so a restart clears it.** That is the trade for having no
+database, and it is the right one at this size — a screening decision is made
+within seconds, and the alternative was a SQLite file whose only reader was a
+list of recent calls. If you later need history to survive a deploy, that is
+the moment to add storage back, not before.
 
 ## Going live
 
@@ -210,25 +188,19 @@ the dashboards hearing about it.
 bounded queue; publishing uses `put_nowait` and drops the *oldest* event when a
 client falls behind. A backgrounded browser tab slows only itself.
 
-**The blocklist is read from memory.** It is consulted on every ring while
-Twilio holds the caller waiting, so it's a cache loaded at startup, not a
-query.
+**No persistence at all.** The webhook path touches no disk, so nothing can
+put a slow write in front of a ringing phone. It also means there is no schema,
+no migration story and no volume to manage.
 
-**Schema drift fails loudly.** `create_all` never alters an existing table, so
-dropping a model column leaves a `NOT NULL` orphan behind that breaks every
-insert — silently, because history writes are deliberately non-fatal. The
-startup check in `db/session.py` refuses to boot instead. Add Alembic before
-this holds data you'd miss.
-
-**Single worker, on purpose.** Call state and the fan-out hub are in-process.
-See [docs/architecture.md](docs/architecture.md) for the scale-out path.
+**Single worker, on purpose.** Call state and the fan-out hub are in-process,
+so a second worker would see a different set of calls. See
+[docs/architecture.md](docs/architecture.md) for the scale-out path.
 
 ## What is still a placeholder
 
 | Area | State |
 | --- | --- |
-| Accept / Reject / Block hang-up | State changes and broadcasts are real; every Twilio REST command (bridge, decline, hangup) is a logged stub in [provider_client.py](backend/app/telephony/provider_client.py) |
-| Unblocking | No way to remove a number except by editing the database |
-| Caller names | Requires Caller ID Lookup enabled on the number (paid, off by default). Without it every caller is a bare number — saved contact names were removed for now |
-| Auth | No login on the dashboard, no authorisation on the API — `blockedBy` is therefore unverified |
+| Accept / Reject | State changes and broadcasts are real; both Twilio REST commands (bridge, decline) are logged stubs in [provider_client.py](backend/app/telephony/provider_client.py), so Accept does not yet put anyone on air |
+| Caller names | Requires Caller ID Lookup enabled on the number (paid, off by default). Without it every caller is a bare number |
+| Auth | No login on the dashboard and no authorisation on the API |
 | Providers | Twilio only. `<Gather input="speech">` has no direct equivalent elsewhere, so another provider means a real port, not a config change |

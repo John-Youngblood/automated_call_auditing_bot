@@ -1,41 +1,34 @@
 import { formatClock, formatDuration, formatPhoneNumber, statusLabel } from '../lib/format';
-import type { CallHistoryEntry } from '../types/events';
+import type { Call } from '../types/events';
 
 interface Props {
-  entries: CallHistoryEntry[];
+  calls: Call[];
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
-  onBlock: (entry: CallHistoryEntry) => void;
 }
 
 /**
- * Past calls: completed, rejected, dropped and blocked.
+ * Past calls: accepted, rejected and dropped.
  *
  * Separate from the live queue on purpose. The queue is a work surface -- a
  * few rows demanding a decision in the next few seconds. History is a record,
  * read at leisure, and mixing the two makes the urgent rows harder to find.
  *
- * Every row carries a Block action so a moderator can bar a caller who has
- * already hung up, which is the common case: by the time you decide someone
- * needs blocking, the call is usually over.
+ * The server keeps these in memory only, so the list starts empty after a
+ * backend restart. The subtitle says so rather than leaving an operator to
+ * wonder where the morning's calls went.
  */
-export default function CallHistoryView({
-  entries,
-  loading,
-  error,
-  onRefresh,
-  onBlock,
-}: Props) {
+export default function CallHistoryView({ calls, loading, error, onRefresh }: Props) {
   return (
     <section className="history" aria-label="Call history">
       <header className="history__header">
         <div>
           <h2>Call History</h2>
           <p className="history__subtitle">
-            {entries.length > 0
-              ? `${entries.length} recent call${entries.length === 1 ? '' : 's'}`
-              : 'Completed, rejected, dropped and blocked calls'}
+            {calls.length > 0
+              ? `${calls.length} recent call${calls.length === 1 ? '' : 's'} · cleared when the server restarts`
+              : 'Accepted, rejected and dropped calls'}
           </p>
         </div>
         <button type="button" className="button button--ghost button--compact" onClick={onRefresh}>
@@ -49,9 +42,9 @@ export default function CallHistoryView({
         </p>
       )}
 
-      {loading && entries.length === 0 ? (
+      {loading && calls.length === 0 ? (
         <p className="history__empty">Loading…</p>
-      ) : entries.length === 0 ? (
+      ) : calls.length === 0 ? (
         <p className="history__empty">No calls yet. Finished calls appear here.</p>
       ) : (
         <div className="history__scroll">
@@ -62,14 +55,11 @@ export default function CallHistoryView({
                 <th scope="col">Caller</th>
                 <th scope="col">Status</th>
                 <th scope="col">Transcript</th>
-                <th scope="col">
-                  <span className="sr-only">Actions</span>
-                </th>
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry) => (
-                <HistoryRow key={entry.callId} entry={entry} onBlock={onBlock} />
+              {calls.map((call) => (
+                <HistoryRow key={call.callId} call={call} />
               ))}
             </tbody>
           </table>
@@ -79,73 +69,50 @@ export default function CallHistoryView({
   );
 }
 
-function HistoryRow({
-  entry,
-  onBlock,
-}: {
-  entry: CallHistoryEntry;
-  onBlock: (entry: CallHistoryEntry) => void;
-}) {
-  const canBlock = Boolean(entry.fromNumber) && !entry.isBlocked;
+function HistoryRow({ call }: { call: Call }) {
+  const duration = durationSeconds(call);
 
   return (
     <tr>
       <td className="history__time">
-        <span>{formatClock(entry.startedAt)}</span>
-        <span className="history__date">{formatHistoryDate(entry.startedAt)}</span>
+        <span>{formatClock(call.startedAt)}</span>
+        <span className="history__date">{formatHistoryDate(call.startedAt)}</span>
       </td>
 
       <td>
         {/* Carrier caller-ID name when there is one, with the number below it;
             otherwise the number is the heading. */}
         <span className="history__number">
-          {entry.fromName ?? formatPhoneNumber(entry.fromNumber)}
+          {call.caller.name ?? formatPhoneNumber(call.caller.number)}
         </span>
         <span className="history__caller-meta">
-          {[entry.fromName ? formatPhoneNumber(entry.fromNumber) : null, entry.fromLocation]
+          {[call.caller.name ? formatPhoneNumber(call.caller.number) : null, call.caller.location]
             .filter(Boolean)
             .join(' · ')}
         </span>
       </td>
 
       <td>
-        <span className={`status status--${entry.status}`}>{statusLabel(entry.status)}</span>
-        {entry.durationSeconds !== null && (
-          <span className="history__duration">{formatDuration(entry.durationSeconds)}</span>
-        )}
+        <span className={`status status--${call.status}`}>{statusLabel(call.status)}</span>
+        {duration !== null && <span className="history__duration">{formatDuration(duration)}</span>}
       </td>
 
       <td className="history__transcript">
-        {entry.transcriptSummary ? (
-          <span>{entry.transcriptSummary}</span>
+        {call.transcript ? (
+          <span>{call.transcript}</span>
         ) : (
           <span className="history__no-transcript">No transcript</span>
         )}
       </td>
-
-      <td className="history__actions">
-        {entry.isBlocked ? (
-          <span className="badge badge--closed" title="This caller is on the blocklist">
-            Blocked
-          </span>
-        ) : (
-          <button
-            type="button"
-            className="button button--danger button--compact"
-            onClick={() => onBlock(entry)}
-            disabled={!canBlock}
-            title={
-              canBlock
-                ? 'Bar this caller from calling again'
-                : 'Caller ID was withheld, so there is no number to block'
-            }
-          >
-            Block
-          </button>
-        )}
-      </td>
     </tr>
   );
+}
+
+/** How long the call was being screened, or null while it is still open. */
+function durationSeconds(call: Call): number | null {
+  if (!call.endedAt) return null;
+  const seconds = (new Date(call.endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000;
+  return Math.max(0, Math.round(seconds));
 }
 
 function formatHistoryDate(iso: string): string {
