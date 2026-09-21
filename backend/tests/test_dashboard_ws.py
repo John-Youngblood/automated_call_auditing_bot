@@ -2,9 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 from fastapi.testclient import TestClient
+from uvicorn.protocols.utils import ClientDisconnected
+
+from app.main import create_app
 
 INCOMING = {"CallSid": "CA-dash-1", "From": "+15551112222", "To": "+15559990000"}
+
+#: A connection scope as uvicorn builds one, for tests that drive the endpoint
+#: directly instead of through TestClient (which cannot fail a send).
+WS_SCOPE = {
+    "type": "websocket",
+    "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1",
+    "scheme": "ws",
+    "path": "/ws/frontend",
+    "raw_path": b"/ws/frontend",
+    "query_string": b"",
+    "root_path": "",
+    "headers": [(b"host", b"testserver")],
+    "client": ("testclient", 50000),
+    "server": ("testserver", 80),
+    "subprotocols": [],
+}
 
 
 def test_snapshot_is_sent_immediately_on_connect(client: TestClient) -> None:
@@ -184,3 +207,47 @@ def test_history_holds_only_finished_calls(client: TestClient) -> None:
     history = client.get("/api/call-history").json()
     assert [c["callId"] for c in history] == [INCOMING["CallSid"]]
     assert history[0]["status"] == "rejected"
+
+
+async def test_abrupt_disconnect_does_not_escape_the_handler(configure_env) -> None:
+    """A dashboard tab closing is the normal way this socket ends, so it must
+    not surface as an error.
+
+    Uvicorn turns a send to a vanished client into ``ClientDisconnected`` (an
+    ``OSError``), which Starlette re-raises as ``WebSocketDisconnect``. If the
+    handler's parting ``close()`` lets that escape, uvicorn logs a full ASGI
+    traceback every time an operator closes, reloads, or navigates away from
+    the dashboard -- and real errors drown in the noise.
+    """
+    app = create_app()
+
+    inbound = iter(
+        [
+            {"type": "websocket.connect"},
+            # No close handshake: the browser is simply gone.
+            {"type": "websocket.disconnect", "code": 1006},
+        ]
+    )
+    client_gone = False
+    sent: list[str] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal client_gone
+        message = next(inbound, None)
+        if message is None:
+            await asyncio.Event().wait()  # A dead socket delivers nothing more.
+        if message["type"] == "websocket.disconnect":
+            client_gone = True
+        return message
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message["type"])
+        if client_gone:
+            raise ClientDisconnected
+
+    async with app.router.lifespan_context(app):
+        # Raising here is what puts "Exception in ASGI application" in the log.
+        await app({**WS_SCOPE, "state": {}}, receive, send)
+
+    # The close was attempted and its failure swallowed -- not skipped.
+    assert sent == ["websocket.accept", "websocket.send", "websocket.close"]

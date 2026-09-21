@@ -65,7 +65,11 @@ async def frontend_stream(
             if (exc := task.exception()) is not None and not isinstance(exc, WebSocketDisconnect):
                 logger.exception("dashboard task failed", exc_info=exc)
 
-    with contextlib.suppress(RuntimeError):
+    # A close that fails just means the socket is already gone -- the client
+    # vanished (WebSocketDisconnect, which is what Starlette raises when
+    # uvicorn reports ClientDisconnected) or we already closed it
+    # (RuntimeError). Neither is an error: there is nothing left to close.
+    with contextlib.suppress(WebSocketDisconnect, RuntimeError):
         await websocket.close()
 
 

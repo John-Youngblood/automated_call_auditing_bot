@@ -1,41 +1,60 @@
 /* Design tokens. Light palette on :root, dark applied via prefers-color-scheme
-   so the dashboard is readable in a dim call centre without a theme toggle. */
+   so the dashboard is readable in a dim studio without a theme toggle.
+
+   Drawn from the show's logo: sky blue #7ED9F8, orchid #D06DFE, magenta
+   #B137C8 and a muted deep purple #734EAB. Those four drive the accent, the
+   header gradient and a purple cast through the neutrals.
+
+   Accept/Reject/status colours deliberately stay green, red and amber. They
+   are read under time pressure by someone deciding whether to put a stranger
+   on air, and semantics beat brand consistency every time there. */
 :root {
-  --bg: #f4f5f7;
+  --bg: #f5f3f9;
   --surface: #ffffff;
-  --surface-alt: #f8f9fb;
-  --border: #e1e4ea;
-  --text: #16191f;
-  --text-muted: #667085;
-  --accent: #2f6feb;
-  --accent-soft: #e8f0ff;
+  --surface-alt: #faf8fd;
+  --border: #e5dff0;
+  --text: #1a1524;
+  --text-muted: #6b6280;
+  /* A shade deeper than the logo's #B137C8 so it clears 4.5:1 on both white
+     and --accent-soft; the pills it colours are small text. */
+  --accent: #a32fba;
+  --accent-soft: #f8eafd;
   --success: #17803d;
   --success-soft: #e6f5ec;
   --danger: #c0272d;
   --danger-soft: #fdecec;
   --warning: #9a6200;
   --warning-soft: #fdf3e2;
+  /* The logo's palette, run right-to-left relative to the logo itself. The
+     sky blue is too light to carry white type, and the brand name sits on the
+     left -- so the saturated end goes under the text and the blue fades in
+     over the empty middle. Every stop left of centre clears 4.5:1 on white. */
+  --brand-gradient: linear-gradient(107deg, #9b2fb8 0%, #b137c8 24%, #a259e0 54%, #8fb8ee 82%, #7ed9f8 100%);
   --radius: 10px;
-  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 1px 3px rgb(16 24 40 / 8%);
+  --shadow: 0 1px 2px rgb(26 21 36 / 6%), 0 1px 3px rgb(26 21 36 / 8%);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #101216;
-    --surface: #181b21;
-    --surface-alt: #1f232b;
-    --border: #2b3039;
-    --text: #e8eaed;
-    --text-muted: #9aa3b2;
-    --accent: #6c9bff;
-    --accent-soft: #1b2438;
+    --bg: #121018;
+    --surface: #1b1724;
+    --surface-alt: #241f30;
+    --border: #342d44;
+    --text: #ece8f4;
+    --text-muted: #a297b8;
+    --accent: #d06dfe;
+    --accent-soft: #2c1c3d;
     --success: #4ecb79;
     --success-soft: #16251c;
     --danger: #ff7a7a;
     --danger-soft: #2a1718;
     --warning: #e0a63c;
     --warning-soft: #2a2115;
+    /* Same hues and the same direction, dropped in luminance. The light
+       gradient at full strength glares against a dark body and pulls the eye
+       off the queue. */
+    --brand-gradient: linear-gradient(107deg, #6e1f84 0%, #7c2790 24%, #6f3d9e 54%, #3f6f96 82%, #3f93b4 100%);
     --shadow: 0 1px 2px rgb(0 0 0 / 40%);
   }
 }
@@ -73,20 +92,26 @@ h2 {
   justify-content: space-between;
   gap: 16px;
   padding: 14px 20px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  /* The one branded surface. Everything below is a work surface and stays
+     neutral, so the colour says "this is the show's dashboard" without
+     competing with a queue an operator has to read at a glance. */
+  background: var(--brand-gradient);
+  border-bottom: 1px solid rgb(0 0 0 / 14%);
   flex-wrap: wrap;
 }
 
 .app__brand h1 {
   font-size: 17px;
   letter-spacing: -0.01em;
+  /* Fixed white rather than --text: the gradient is the same in both themes,
+     so the type on it cannot follow the theme. */
+  color: #fff;
 }
 
 .app__brand p {
   margin: 2px 0 0;
   font-size: 13px;
-  color: var(--text-muted);
+  color: rgb(255 255 255 / 78%);
 }
 
 /* Two panes on desktop; the queue collapses above the detail on narrow
@@ -587,8 +612,10 @@ h2 {
   display: flex;
   gap: 4px;
   padding: 3px;
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
+  /* Translucent, so the pill picks up whatever part of the gradient it sits
+     over instead of punching a flat grey hole in it. */
+  background: rgb(255 255 255 / 16%);
+  border: 1px solid rgb(255 255 255 / 26%);
   border-radius: 999px;
 }
 
@@ -600,7 +627,7 @@ h2 {
   font: inherit;
   font-size: 13.5px;
   font-weight: 500;
-  color: var(--text-muted);
+  color: rgb(255 255 255 / 82%);
   background: transparent;
   border: none;
   border-radius: 999px;
@@ -609,7 +636,7 @@ h2 {
 }
 
 .tab:hover {
-  color: var(--text);
+  color: #fff;
 }
 
 .tab--active {
@@ -618,8 +645,9 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+/* White, not --accent: a purple ring on a purple gradient is not a ring. */
 .tab:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid #fff;
   outline-offset: 1px;
 }
 
@@ -628,9 +656,15 @@ h2 {
   padding: 1px 6px;
   font-size: 11.5px;
   font-weight: 600;
+  color: #fff;
+  background: rgb(255 255 255 / 22%);
+  border-radius: 999px;
+}
+
+/* The active tab is a solid pane, so its count goes back to the accent. */
+.tab--active .tab__count {
   color: var(--accent);
   background: var(--accent-soft);
-  border-radius: 999px;
 }
 
 /* Single-pane views (history) drop the queue column. */
