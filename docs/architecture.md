@@ -120,6 +120,35 @@ build routing or policy on it.
 rule exists in Python only; the dashboard renders `caller.location` verbatim
 rather than reimplementing it in TypeScript.
 
+### The restart gap, and how far it closes
+
+Dropping the database bought simplicity and cost one thing: a restart loses
+every in-flight call while Twilio still holds the callers. `services/reconcile.py`
+closes most of that gap by asking Twilio who is queued and rebuilding the
+registry from the answer.
+
+What it cannot close is the transcript. Twilio's Call resource has the number,
+the name and the start time; it has never had what the caller said, because
+that reached us as a `SpeechResult` webhook parameter and nowhere else. The
+same is true of `FromCity`/`FromState`/`FromCountry`.
+
+That asymmetry is the whole design constraint. Everything cheap to recover is
+recovered; the one expensive thing is marked (`Call.recovered`) so the UI can
+be honest about it rather than rendering a recovered caller identically to one
+who stayed silent. If that ever stops being good enough, the minimal fix is
+not "add a database back" — it is persisting *only* the transcript, keyed by
+CallSid, which is the sole field Twilio cannot give you.
+
+Two implementation notes that are easy to get wrong:
+
+- Reconciliation runs as a **background task**, not inside lifespan startup.
+  Uvicorn does not accept connections until startup returns, so awaiting a
+  slow Twilio there would make the number refuse new calls in order to recover
+  old ones.
+- `register_recovered` **refuses to overwrite a known call**. A caller can be
+  mid-webhook while reconciliation runs, and a blank recovered row landing on
+  top of a live one would destroy the transcript that survived.
+
 ### Why there is no database
 
 There was one: SQLite via SQLAlchemy, holding a blocklist and a `call_history`

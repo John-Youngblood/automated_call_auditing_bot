@@ -40,6 +40,11 @@ export default function TranscriptPanel({ call }: Props) {
           )}
           <blockquote className="transcript__quote">{call.transcript}</blockquote>
         </>
+      ) : call.recovered ? (
+        <p className="transcript__recovered" role="status">
+          Recovered after a restart — this caller is still on hold, but what they said was
+          lost. Ask them again when you take the call.
+        </p>
       ) : (
         <p className="transcript__empty">
           The caller didn’t say anything. They may have hung up, or been silent.

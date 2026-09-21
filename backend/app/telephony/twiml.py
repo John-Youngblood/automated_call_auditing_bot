@@ -96,22 +96,33 @@ def answer_and_gather(
     return _document(response)
 
 
-def hold(queue_name: str, action_url: str) -> RenderedResponse:
+def hold(queue_name: str, action_url: str, wait_url: str = "") -> RenderedResponse:
     """Park the caller while an operator reads their transcript.
 
     ``<Enqueue>`` earns its place: one verb holds the call open indefinitely
-    with Twilio's built-in hold music -- no queue to pre-create, no hold audio
-    to host, and no redirect loop to keep alive. Accepting the call dequeues
-    it.
+    with hold music -- no queue to pre-create and no redirect loop to keep
+    alive. Accepting the call dequeues it.
 
     ``action`` is how we find out the caller gave up. Twilio requests it when
     the call leaves the queue for any reason and passes ``QueueResult``
     (``hangup`` when they hung up while waiting) plus ``QueueTime``. Without
     it, a caller who abandons the queue leaves no trace and their card sits on
     the dashboard until someone tries to put a dead line on air.
+
+    ``wait_url`` points at one audio file, looped by Twilio for as long as the
+    caller waits. Omitting it gets Twilio's default classical playlist.
+
+    Note the method split: ``action`` is POSTed like every other webhook here,
+    but ``waitUrl`` is deliberately a GET, because Twilio only caches a static
+    audio file when it fetches it with GET. POST it and the same MP3 is
+    re-downloaded on every loop, for every caller.
     """
     response = Element("Response")
-    enqueue = SubElement(response, "Enqueue", {"action": action_url, "method": "POST"})
+    attributes = {"action": action_url, "method": "POST"}
+    if wait_url:
+        attributes["waitUrl"] = wait_url
+        attributes["waitUrlMethod"] = "GET"
+    enqueue = SubElement(response, "Enqueue", attributes)
     enqueue.text = queue_name
     return _document(response)
 

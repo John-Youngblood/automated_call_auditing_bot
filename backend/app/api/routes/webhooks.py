@@ -181,6 +181,7 @@ async def speech_result(
         hold(
             settings.hold_queue_name,
             f"{settings.public_base_url.rstrip('/')}{QUEUE_EXIT_PATH}",
+            wait_url=settings.hold_music_url,
         )
     )
 

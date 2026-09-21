@@ -72,8 +72,16 @@ interface RowProps {
 
 function QueueRow({ call, selected, onSelect, now }: RowProps) {
   // The transcript doubles as a preview, so an operator can triage from the
-  // list without opening every call.
-  const preview = call.transcript ?? (call.status === 'screening' ? 'Still speaking…' : null);
+  // list without opening every call. A recovered call has no transcript to
+  // show and needs saying so -- otherwise it renders as a blank row, which
+  // reads as a caller who stayed silent.
+  const preview =
+    call.transcript ??
+    (call.status === 'screening'
+      ? 'Still speaking…'
+      : call.recovered
+        ? 'Recovered after restart — reason unknown'
+        : null);
 
   return (
     <li>

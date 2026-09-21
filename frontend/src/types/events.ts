@@ -56,6 +56,13 @@ export interface Call {
   transcript: string | null;
   /** Twilio's confidence in that transcription, 0-1. */
   transcriptConfidence: number | null;
+  /**
+   * True when the backend rebuilt this call from Twilio after a restart. The
+   * caller is really on hold, but their transcript died with the previous
+   * process — so the UI must say so rather than render the same empty state
+   * as a caller who genuinely said nothing.
+   */
+  recovered: boolean;
 }
 
 export type ServerEventType =

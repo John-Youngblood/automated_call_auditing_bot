@@ -50,8 +50,36 @@ class Settings(BaseSettings):
     #: Twilio queue callers wait in while an operator reads their transcript.
     #: Created on demand -- nothing to set up in the console.
     hold_queue_name: str = "screening"
+
+    #: Absolute URL of a single audio file to play on hold. Blank leaves
+    #: <Enqueue> without a waitUrl, which gets Twilio's default classical
+    #: playlist. Twilio loops whichever it is for as long as the caller waits.
+    hold_music_url: str = ""
     validate_webhook_signature: bool = False
+
+    #: Signature verification is HMAC'd with the *auth token* specifically --
+    #: an API key secret will not validate. Kept separate from the REST
+    #: credentials below so rotating one does not break the other.
     twilio_auth_token: str = ""
+
+    # --- Twilio REST -------------------------------------------------------
+    #: Credentials for talking *to* Twilio. An API key is preferred over the
+    #: auth token because it can be revoked on its own; leave the key blank to
+    #: fall back to account SID + auth token.
+    twilio_account_sid: str = ""
+    twilio_api_key_sid: str = ""
+    twilio_api_key_secret: str = ""
+
+    #: Short on purpose. Every REST call here happens off the webhook path, so
+    #: a slow Twilio should make us give up and log rather than pile up.
+    twilio_api_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+
+    #: On boot, ask Twilio who is still holding in the queue and put them back
+    #: on the dashboard. Without it a restart mid-show strands every waiting
+    #: caller: Twilio keeps playing them hold music while no operator can see
+    #: them. See app/services/reconcile.py for what can and cannot be
+    #: recovered. Needs the REST credentials above; skipped silently without.
+    reconcile_on_startup: bool = True
 
     #: Where an accepted call is bridged to. A real deployment would look this
     #: up per operator rather than using one station number.

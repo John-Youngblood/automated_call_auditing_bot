@@ -78,8 +78,12 @@ Four details that matter:
   pause, truncating anyone mid-explanation.
 - **`<Play>` sits inside `<Gather>`**, so the greeting doubles as the prompt and
   a caller who talks over it is still heard.
-- **`<Enqueue>`** holds the call open with Twilio's built-in hold music — no
-  queue to pre-create, no hold audio to host, no redirect loop to maintain.
+- **`<Enqueue>`** holds the call open with hold music — no queue to
+  pre-create and no redirect loop to maintain. Set `HOLD_MUSIC_URL` to one
+  audio file of your own, or leave it blank for Twilio's default classical
+  playlist. It is fetched with `waitUrlMethod="GET"` on purpose: Twilio only
+  caches a static audio file when it GETs it, so POSTing would re-download
+  the same MP3 on every loop for every waiting caller.
 - **`<Enqueue action>` is how abandonment is detected.** Nothing keeps a
   connection to this service while a caller holds, so without it a caller who
   gives up leaves no trace. Twilio posts `QueueResult=hangup` and `QueueTime`.
@@ -103,10 +107,12 @@ Four details that matter:
 │   │   ├── services/
 │   │   │   ├── call_registry.py  # single writer of call state, live + recent
 │   │   │   ├── broadcaster.py    # bounded-queue fan-out to dashboards
+│   │   │   ├── reconcile.py      # rebuild the queue from Twilio on boot
 │   │   │   └── phone.py          # caller location labels
 │   │   └── telephony/            # Twilio-specific code, all of it
 │   │       ├── twiml.py              # the two XML documents
 │   │       ├── signature.py          # webhook authenticity
+│   │       ├── rest.py               # reading queue state back out of Twilio
 │   │       └── provider_client.py    # REST control: bridge / decline (stub)
 │   ├── scripts/simulate_call.py  # fake calls, no phone needed
 │   └── tests/
@@ -135,6 +141,48 @@ within seconds, and the alternative was a SQLite file whose only reader was a
 list of recent calls. If you later need history to survive a deploy, that is
 the moment to add storage back, not before.
 
+## Surviving a restart
+
+Call state lives only in this process; callers on hold live in a Twilio
+`<Enqueue>` queue, which does not. A restart desynchronises the two in the
+worst direction — Twilio keeps playing hold music to people no operator can
+see, and **nothing ever fires to tell you they are there**. They aren't
+disconnected, they're stranded, which is harder to notice and worse for the
+caller.
+
+So on boot the service asks Twilio who is still waiting and puts them back:
+
+```
+GET /Queues.json               find the hold queue by name
+GET /Queues/{sid}/Members.json who is in it
+GET /Calls/{sid}.json          who each of them is
+```
+
+| Recovered | Lost |
+|---|---|
+| Call SID, caller number, the number they dialled, carrier caller-ID name, original start time | **The transcript**, and the city/state labels |
+
+The transcript only ever existed in the previous process's memory, and
+`FromCity`/`FromState` are webhook parameters Twilio doesn't keep on the Call
+resource. Recovered callers are therefore flagged — the queue row reads
+"Recovered after restart — reason unknown" instead of rendering the same blank
+as someone who said nothing, and the detail pane tells the operator to ask
+again.
+
+Three things worth knowing about the implementation:
+
+- **It runs in the background, not during startup.** Uvicorn doesn't accept
+  connections until lifespan startup returns, so blocking on a slow Twilio
+  would make the number refuse *new* calls in order to recover old ones.
+- **It never overwrites a live call.** A caller can be mid-webhook while it
+  runs; clobbering their transcript with a blank recovered row would destroy
+  the one thing that can't be recovered.
+- **Failure is survivable.** No credentials, no queue, or Twilio unreachable
+  all degrade to an empty queue and a log line.
+
+Needs `TWILIO_ACCOUNT_SID` plus an API key. Set `RECONCILE_ON_STARTUP=false`
+to turn it off.
+
 ## Going live
 
 1. Expose the backend publicly — Twilio dials in from the internet:
@@ -151,11 +199,15 @@ the moment to add storage back, not before.
 5. Set `TWILIO_AUTH_TOKEN` and `VALIDATE_WEBHOOK_SIGNATURE=true`. Both webhooks
    are public URLs; unsigned, anyone who finds them can fabricate a call or
    inject words the caller never said.
-6. Optionally enable **Caller ID Lookup** (`VoiceCallerIdLookup`) on the
+6. Set `TWILIO_ACCOUNT_SID` and an API key (`TWILIO_API_KEY_SID` /
+   `TWILIO_API_KEY_SECRET`) so the service can read the hold queue back on
+   boot — see [Surviving a restart](#surviving-a-restart). The auth token
+   works too, but an API key rotates independently of signature checking.
+7. Optionally enable **Caller ID Lookup** (`VoiceCallerIdLookup`) on the
    number if you want caller names. It is off by default and billed per
    lookup; without it `CallerName` is never sent and every caller shows as a
    bare number.
-7. Check the greeting (`backend/app/static/greeting.mp3`) still says what you
+8. Check the greeting (`backend/app/static/greeting.mp3`) still says what you
    want. It plays inside `<Gather>`, so it *is* the prompt — it has to ask the
    caller to state their reason. Set `GREETING_AUDIO_URL` to host it
    elsewhere.

@@ -442,6 +442,18 @@ h2 {
   border-radius: 6px;
 }
 
+/* Amber like the low-confidence warning, and for the same reason: the
+   operator is about to make a decision from information they do not have. */
+.transcript__recovered {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: 6px;
+}
+
 /* --------------------------------------------------------------- actions -- */
 /* Stacked, full width. Three side-by-side buttons in a 300px column forced
    each one narrower than its own label. */

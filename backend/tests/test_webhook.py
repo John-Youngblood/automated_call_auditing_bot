@@ -93,6 +93,9 @@ class TestSpeechResult:
         # Without an action URL nothing ever tells us the caller gave up while
         # holding -- there is no other connection to this service.
         assert enqueue.attrib["action"] == "https://calls.example.test/webhook/queue-exit"
+        # No HOLD_MUSIC_URL configured, so no waitUrl at all -- that is what
+        # gets Twilio's default playlist rather than silence.
+        assert "waitUrl" not in enqueue.attrib
 
         call = client.get("/api/calls/CA0123456789").json()
         assert call["transcript"] == "I have a question for your guest."
@@ -306,3 +309,36 @@ class TestQueueExit:
         )
 
         assert response.status_code == 200
+
+
+class TestHoldMusic:
+    """One audio file, looped by Twilio for as long as the caller waits."""
+
+    def hold_twiml(self, client: TestClient):
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        response = client.post(
+            "/webhook/speech-result",
+            data={"CallSid": TWILIO_FORM["CallSid"], "SpeechResult": "Hello", "Confidence": "0.9"},
+        )
+        return fromstring(response.text).find("Enqueue")
+
+    def test_configured_music_is_played(self, make_client) -> None:
+        client = make_client(HOLD_MUSIC_URL="https://cdn.example.test/hold.mp3")
+        with client:
+            enqueue = self.hold_twiml(client)
+
+        assert enqueue is not None
+        assert enqueue.attrib["waitUrl"] == "https://cdn.example.test/hold.mp3"
+
+    def test_wait_url_is_fetched_with_get(self, make_client) -> None:
+        """Twilio only caches a static audio file when it GETs it. Left as the
+        POST that `action` uses, the same MP3 is re-downloaded on every loop
+        of every waiting caller."""
+        client = make_client(HOLD_MUSIC_URL="https://cdn.example.test/hold.mp3")
+        with client:
+            enqueue = self.hold_twiml(client)
+
+        assert enqueue is not None
+        assert enqueue.attrib["waitUrlMethod"] == "GET"
+        # The action URL is unaffected -- it is our webhook, not an audio file.
+        assert enqueue.attrib["method"] == "POST"

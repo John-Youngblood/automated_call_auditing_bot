@@ -10,6 +10,8 @@ never import routes -- and lets tests build a fresh app with its own state.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -23,6 +25,7 @@ from app.api.routes import calls, frontend, health, webhooks
 from app.config import Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
+from app.services.reconcile import reconcile_hold_queue
 from app.telephony.provider_client import create_telephony_client
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -74,9 +77,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "VALIDATE_WEBHOOK_SIGNATURE is off outside local -- the call webhook is spoofable"
         )
 
+    # Deliberately a background task, not an await. Uvicorn does not accept
+    # connections until lifespan startup returns, so blocking here on a slow
+    # Twilio would make the number refuse *new* calls in order to recover old
+    # ones -- exactly the wrong trade. The queue fills in a moment later and
+    # every dashboard is told over the socket.
+    reconciler: asyncio.Task[int] | None = None
+    if settings.reconcile_on_startup:
+        reconciler = asyncio.create_task(
+            reconcile_hold_queue(app.state.registry, settings), name="reconcile-hold-queue"
+        )
+
     try:
         yield
     finally:
+        if reconciler is not None and not reconciler.done():
+            reconciler.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconciler
         # Release dashboards before the server stops accepting, so clients see
         # a clean close and reconnect rather than a timeout.
         broadcaster.close_all()

@@ -82,6 +82,13 @@ class Call(CamelModel):
     #: to make a decision from.
     transcript_confidence: float | None = None
 
+    #: True when this call was rebuilt from Twilio at startup rather than seen
+    #: arrive. Such a call is genuinely on hold, but its transcript died with
+    #: the previous process -- so the dashboard has to say so rather than
+    #: showing a silent caller with no stated reason, which looks identical to
+    #: someone who said nothing.
+    recovered: bool = False
+
     @property
     def is_open(self) -> bool:
         """Whether the call still belongs in the live screening queue.

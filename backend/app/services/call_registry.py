@@ -95,6 +95,51 @@ class CallRegistry:
         self._publish(ServerEventType.CALL_INCOMING, call)
         return call
 
+    def register_recovered(
+        self,
+        call_id: str,
+        *,
+        caller: Caller | None = None,
+        to_number: str | None = None,
+        started_at: datetime | None = None,
+    ) -> Call | None:
+        """Put a caller Twilio still has on hold back on the dashboard.
+
+        Goes straight to ON_HOLD: they are past the greeting and the gather,
+        which is why Twilio has them queued at all. There is no transcript to
+        restore -- it only ever lived in the previous process's memory -- so
+        ``recovered`` is set and the UI says as much.
+
+        Returns ``None`` when the call is already known, which is the race
+        worth getting right: a caller can be mid-webhook while reconciliation
+        runs, and overwriting a live call that already has its transcript with
+        a blank recovered one would destroy the very thing that survived.
+        """
+        if call_id in self._calls:
+            return None
+
+        call = Call(
+            call_id=call_id,
+            status=CallStatus.ON_HOLD,
+            caller=caller or Caller(),
+            to_number=to_number,
+            recovered=True,
+        )
+        if started_at is not None:
+            # Keep the caller's real start time so the queue timer shows how
+            # long they have actually been waiting, not how long since we
+            # rebooted. That number is what decides who to take first.
+            call.started_at = started_at
+        self._calls[call_id] = call
+        logger.info(
+            "recovered call call_id=%s from=%s waiting_since=%s",
+            call_id,
+            call.caller.number,
+            call.started_at.isoformat(),
+        )
+        self._publish(ServerEventType.CALL_INCOMING, call)
+        return call
+
     def set_transcript(
         self, call_id: str, text: str, confidence: float | None = None
     ) -> Call | None:
