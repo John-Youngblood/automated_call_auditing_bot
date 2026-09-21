@@ -100,18 +100,35 @@ h2 {
   flex-wrap: wrap;
 }
 
+.app__brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+/* The logo is a full-bleed gradient square sitting on a gradient header, so
+   without a hairline ring the two bleed into each other and the mark loses
+   its edge. Sized in CSS, not on the element: the source is 900x900.
+
+   44px, not the 36px a favicon-sized mark would take: this is a full lockup
+   ("THE H3 PODCAST"), and below about 40 the H3 stops resolving and it reads
+   as a coloured blob. The smaller type in it is decorative at any size the
+   header can afford -- same as the avatar on the channel page. */
+.app__logo {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 45%), 0 1px 3px rgb(0 0 0 / 22%);
+}
+
 .app__brand h1 {
   font-size: 17px;
   letter-spacing: -0.01em;
   /* Fixed white rather than --text: the gradient is the same in both themes,
      so the type on it cannot follow the theme. */
   color: #fff;
-}
-
-.app__brand p {
-  margin: 2px 0 0;
-  font-size: 13px;
-  color: rgb(255 255 255 / 78%);
 }
 
 /* Two panes on desktop; the queue collapses above the detail on narrow

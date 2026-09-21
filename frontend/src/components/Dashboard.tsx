@@ -46,8 +46,10 @@ export default function Dashboard() {
     <div className="app">
       <header className="app__header">
         <div className="app__brand">
+          {/* Named rather than decorative: the logo is the only place the show
+              itself is identified in the UI, so alt="" would drop that. */}
+          <img className="app__logo" src="/h3_logo.png" alt="The H3 Podcast" />
           <h1>Call Screener</h1>
-          <p>Live call screening</p>
         </div>
 
         <nav className="tabs" aria-label="Views">

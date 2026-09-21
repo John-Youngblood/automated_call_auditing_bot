@@ -1,0 +1,20 @@
+{
+  "name": "H3 Call Screener",
+  "short_name": "Screener",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#b137c8",
+  "background_color": "#f5f3f9",
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
