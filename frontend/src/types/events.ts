@@ -33,11 +33,7 @@ export interface Caller {
    * often generic ("WIRELESS CALLER") when present.
    */
   name: string | null;
-  /**
-   * Where the *number* is registered, e.g. "Portland, OR" — already formatted
-   * by the backend, so the state-vs-country rule exists in one language only.
-   * Not the caller's actual location: a ported mobile keeps its old area code.
-   */
+  /** Where the *number* is registered, not the caller. Formatted server-side. */
   location: string | null;
 }
 
@@ -48,33 +44,15 @@ export interface Call {
   toNumber: string | null;
   startedAt: string;
   endedAt: string | null;
-  /**
-   * What the caller said when asked why they are calling. Arrives complete in
-   * one update once they stop speaking, so there is no partial state to
-   * reconcile -- it is either null or the whole thing.
-   */
+  /** Arrives complete in one update — never partial. */
   transcript: string | null;
   /** Twilio's confidence in that transcription, 0-1. */
   transcriptConfidence: number | null;
-  /**
-   * True once an operator pressed Accept. Survives the call ending, which
-   * `accepted` does not — that status means "on air right now" and becomes
-   * `ended` when the bridge finishes. Without this, history could not tell a
-   * caller who made it on air from one who hung up during screening.
-   */
+  /** Sticky, unlike `accepted`, which becomes `ended` once the bridge ends. */
   wasAccepted: boolean;
-  /**
-   * Seconds spent talking to the host. `null` alongside `wasAccepted` is
-   * meaningful rather than missing: the bridge never connected, usually
-   * because the host was already on a call.
-   */
+  /** `null` alongside `wasAccepted` means the bridge never connected. */
   onAirSeconds: number | null;
-  /**
-   * True when the backend rebuilt this call from Twilio after a restart. The
-   * caller is really on hold, but their transcript died with the previous
-   * process — so the UI must say so rather than render the same empty state
-   * as a caller who genuinely said nothing.
-   */
+  /** Rebuilt from Twilio after a restart, so on hold but with no transcript. */
   recovered: boolean;
 }
 
@@ -129,10 +107,8 @@ export function isServerEvent(value: unknown): value is ServerEvent {
 /**
  * Result of `POST /api/line/open` and `POST /api/line/close`.
  *
- * Closing hangs up on whoever was holding, so the outcome of that comes back
- * here too. Successes and failures are separate because a caller we could not
- * reach is still connected and still hearing hold music — silence would let
- * an operator walk away believing the line was clear.
+ * Closing also hangs up on whoever was holding. Failures are listed separately
+ * because those callers are still connected.
  */
 export interface LineStateResult {
   open: boolean;

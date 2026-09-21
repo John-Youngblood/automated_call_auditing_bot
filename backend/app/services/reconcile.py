@@ -1,29 +1,14 @@
 """Rebuilding the queue from Twilio after a restart.
 
-The problem this solves
------------------------
-Call state lives only in this process (see :mod:`app.services.call_registry`).
-Callers on hold live in a Twilio ``<Enqueue>`` queue, which is *not* in this
-process. A restart therefore desynchronises the two in the worst direction:
-Twilio keeps playing hold music to people no operator can see, and nothing
-ever fires to tell us they are there. They are not disconnected -- they are
-stranded, which is harder to notice and worse for the caller.
+Call state lives only in this process; callers on hold live in a Twilio queue,
+which does not. A restart strands them: Twilio keeps playing hold music to
+people no operator can see, and nothing ever fires to say they are there.
 
-Note that a fallback URL does not help here. Fallbacks fire when a webhook
-request fails; a caller sitting in hold music is not making one.
-
-What comes back, and what does not
-----------------------------------
-Recoverable from Twilio:   call SID, caller number, the number they dialled,
-                           the carrier's caller-ID name, when the call started.
-Gone for good:             **the transcript**, and the city/state/country
-                           labels -- those arrive as webhook parameters and
-                           Twilio does not keep them on the Call resource.
-
-So a recovered caller reappears in the queue, correctly positioned by wait
-time, with no stated reason for calling. ``Call.recovered`` marks them so the
-dashboard says that plainly instead of showing what looks like a caller who
-said nothing.
+Twilio gives back the call SID, number, caller-ID name and start time. It does
+not give back **the transcript** or the city/state labels -- those arrive as
+webhook parameters and are not kept on the Call resource. ``Call.recovered``
+marks the difference so the dashboard does not show what looks like a caller
+who said nothing.
 """
 
 from __future__ import annotations
@@ -106,9 +91,8 @@ async def _fetch_all(
 ) -> dict[str, CallDetails]:
     """Look up each member's Call resource, bounded and fault-tolerant.
 
-    A lookup that fails costs that caller their number, not their place in the
-    queue -- better an anonymous row an operator can still act on than a
-    caller who stays invisible.
+    A failed lookup costs that caller their number, not their place: an
+    anonymous row beats an invisible caller.
     """
     semaphore = asyncio.Semaphore(_LOOKUP_CONCURRENCY)
 

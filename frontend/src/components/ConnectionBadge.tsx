@@ -1,10 +1,6 @@
 import type { ConnectionStatus } from '../types/events';
 
-/**
- * "Connected", not "Live". This badge is about the socket to the backend, and
- * sitting next to the line-state pill "Live" read as a second opinion on
- * whether the show was taking calls.
- */
+/** "Connected", not "Live" — that read as a second opinion on the line state. */
 const LABELS: Record<ConnectionStatus, string> = {
   connecting: 'Connecting',
   open: 'Connected',
@@ -13,14 +9,9 @@ const LABELS: Record<ConnectionStatus, string> = {
 };
 
 /**
- * Connection state is load-bearing on a screening dashboard: an empty queue
- * and a broken socket look identical otherwise, and an operator would sit
- * watching a dead page believing nobody is calling.
- *
- * Deliberately quiet while healthy and loud when not. It has to stay visible
- * -- absence would be as ambiguous as the problem it solves -- but it is
- * plumbing, and the pill beside it carries the state an operator is actually
- * working from.
+ * Load-bearing: an empty queue and a broken socket look identical otherwise,
+ * so an operator could sit watching a dead page believing nobody is calling.
+ * Quiet while healthy, loud when not.
  */
 export default function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   return (

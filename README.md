@@ -1,349 +1,205 @@
 # Call Screener
 
-Screens inbound phone calls. A caller is greeted, asked why they're calling,
-and put on hold; their transcribed reason appears on a dashboard where an
-operator accepts or rejects them.
+Screens inbound phone calls for a live podcast. A caller is greeted, asked why
+they're calling, and put on hold. Their transcribed reason appears on a
+dashboard where an operator puts them on air or turns them away.
 
 ```
-   caller
-     │  PSTN
-     ▼
-┌──────────┐  POST /webhook/incoming-call    ┌─────────────────────┐
-│          │ ──────────────────────────────▶ │                     │
-│  Twilio  │ ◀────────────────────────────── │      FastAPI        │
-│          │   <Gather input="speech">       │                     │
-│          │                                 │  ┌───────────────┐  │
-│  greeting plays, Twilio listens,           │  │ CallRegistry  │  │
-│  detects when the caller stops             │  │ queue+history │  │
-│          │                                 │  │  (in memory)  │  │
-│          │  POST /webhook/speech-result    │  └───────┬───────┘  │
-│          │ ──────────────────────────────▶ │          │          │
-│          │ ◀────────────────────────────── │          │          │
-│          │   <Enqueue> (hold music)        │          │          │
-└──────────┘                                 └──────────┼──────────┘
-                                                        │ WS /ws/frontend
-                                                        ▼
-                                               ┌──────────────────┐
-                                               │ React dashboard  │
-                                               │ queue + history  │
-                                               └──────────────────┘
+   caller ──PSTN──▶ Twilio ──webhooks──▶ FastAPI ──websocket──▶ React dashboard
+                       ▲                     │
+                       └───── REST ──────────┘
+                         (bridge / hang up)
 ```
 
 **Twilio owns the hard part** — deciding when the caller has stopped talking —
-which is why this service handles no audio at all. No media streaming, no
-speech-to-text integration, no audio buffering. The transcript arrives complete
-in one webhook.
+so this service handles no audio. No media streaming, no speech-to-text
+integration. The transcript arrives complete, in one webhook.
 
-**Nothing is stored on disk.** There is no database. Calls being screened and
-the last few hundred finished ones live in one in-memory registry, so a restart
-starts with an empty history — see [Call history](#call-history).
+**Nothing is stored on disk.** No database. Calls being screened and the last
+few hundred finished ones live in one in-memory registry.
 
-## Quick start
+---
+
+## Run it locally
+
+You need **Docker**, or **Python 3.12 + Node 24** (both pinned in
+`.tool-versions`). No Twilio account needed to try it.
 
 ```bash
 cp .env.example .env
-docker compose up --build
 ```
 
-- Dashboard: <http://localhost:5173>
-- API docs: <http://localhost:8000/docs>
+```bash
+make up
+```
 
-No credentials needed to try it. Place some fake calls:
+- Dashboard → <http://localhost:5173>
+- API docs → <http://localhost:8000/docs>
+
+> Port taken? Set `FRONTEND_PORT` / `BACKEND_PORT` in `.env`.
+
+Now put some fake callers in the queue:
 
 ```bash
 make simulate CALLS=3
-make simulate SAY="I have a question for your guest"   # pick the words
 ```
 
-Each appears in the queue with its transcript, and Accept / Reject resolve
-them.
-
-> If port 5173 or 8000 is taken, set `FRONTEND_PORT` / `BACKEND_PORT` in `.env`.
-
-## The call flow
-
-| # | Endpoint | Returns | Caller hears |
-|---|---|---|---|
-| 1 | `POST /webhook/incoming-call` | `<Gather input="speech">` with the greeting nested inside | the greeting, then silence while Twilio listens |
-| 2 | `POST /webhook/speech-result` | `<Enqueue>` | hold music |
-| 3 | `POST /webhook/queue-exit` | empty `<Response/>` | (they left the queue) |
-| 4 | `POST /webhook/dial-complete` | empty `<Response/>` | (their time with the host ended) |
-| 5 | `POST /webhook/call-status` | `204` | (call is over) |
-
-Four details that matter:
-
-- **`speechTimeout` is a number, never `"auto"`.** It's what makes this
-  turn-based — Twilio decides when the caller stopped and only then posts the
-  transcript. Not `auto` for two reasons: Twilio warns (error 13335) when
-  `auto` is combined with a `speechModel`, and `auto` stops at the *first*
-  pause, truncating anyone mid-explanation.
-- **`<Play>` sits inside `<Gather>`**, so the greeting doubles as the prompt and
-  a caller who talks over it is still heard.
-- **`<Enqueue>`** holds the call open with hold music — no queue to
-  pre-create and no redirect loop to maintain. Set `HOLD_MUSIC_URL` to one
-  audio file of your own, or leave it blank for Twilio's default classical
-  playlist. It is fetched with `waitUrlMethod="GET"` on purpose: Twilio only
-  caches a static audio file when it GETs it, so POSTing would re-download
-  the same MP3 on every loop for every waiting caller.
-- **`<Enqueue action>` is how abandonment is detected.** Nothing keeps a
-  connection to this service while a caller holds, so without it a caller who
-  gives up leaves no trace. Twilio posts `QueueResult=hangup` and `QueueTime`.
-- **`<Dial action>` is how the on-air outcome is detected.** It fires the
-  moment the bridge ends, with `DialCallStatus` — `completed` if they talked,
-  `busy` if the host was already on a call and this caller never got through.
-  Either way the call is marked `ended`: `accepted` means *on air right now*,
-  so it has to stop saying that once the call is over.
-- **That handler must hang up, explicitly.** Adding an `action` URL changes
-  what `<Dial>` does when it finishes — instead of ending the call, Twilio
-  keeps the **caller's** leg alive and hands control back. So when the host
-  hangs up first, that caller is still connected and listening to nothing
-  until we return `<Hangup/>`.
-
-## Layout
-
-```
-.
-├── docker-compose.yml        # both services, one command
-├── Makefile                  # make help
-├── .env.example              # every knob, documented
-├── backend/
-│   ├── app/
-│   │   ├── main.py           # composition root
-│   │   ├── config.py         # typed settings, the only reader of the environment
-│   │   ├── api/routes/
-│   │   │   ├── webhooks.py       # the four Twilio webhooks
-│   │   │   ├── calls.py          # accept / reject / history / line control
-│   │   │   ├── frontend.py       # WS /ws/frontend
-│   │   │   └── health.py
-│   │   ├── services/
-│   │   │   ├── call_registry.py  # single writer of call state, live + recent
-│   │   │   ├── broadcaster.py    # bounded-queue fan-out to dashboards
-│   │   │   ├── reconcile.py      # rebuild the queue from Twilio on boot
-│   │   │   ├── drain.py          # hang up on holders when the line closes
-│   │   │   ├── line_state.py     # open / closed, broadcast to dashboards
-│   │   │   └── phone.py          # caller location labels
-│   │   └── telephony/            # Twilio-specific code, all of it
-│   │       ├── twiml.py              # the two XML documents
-│   │       ├── signature.py          # webhook authenticity
-│   │       ├── rest.py               # reading queue state back out of Twilio
-│   │       └── provider_client.py    # REST control: bridge / decline (stub)
-│   ├── scripts/simulate_call.py  # fake calls, no phone needed
-│   └── tests/
-└── frontend/src/
-    ├── components/           # presentational only
-    ├── hooks/
-    │   ├── useCallStream.ts      # one socket, one reducer
-    │   └── useCallHistory.ts     # history is a plain HTTP read
-    └── types/events.ts       # mirrors backend/app/schemas/events.py
+```bash
+make simulate SAY="I have a question for your guest"
 ```
 
-## What the caller hears
+`simulate_call.py` posts the same webhooks Twilio would, so the whole flow —
+greeting, transcript, queueing — runs without a phone. Each call appears in the
+dashboard with its transcript.
 
-Six moments, each an **audio file with a text fallback**. A recording wins when
-one is configured; otherwise Twilio speaks the text in `TTS_VOICE`. So a fresh
-deployment says something sensible with nothing recorded, and you can replace
-each line with real audio one at a time.
+**Accept and Reject need Twilio credentials.** They issue real REST commands,
+so without `TWILIO_ACCOUNT_SID` and an API key they return `503` rather than
+pretending to work. Everything else works offline.
 
-| # | Moment | Audio | Spoken fallback |
-|---|---|---|---|
-| 1 | Greeting — *also the prompt* | `GREETING_AUDIO_URL`, else bundled `greeting.mp3` | `GREETING_MESSAGE` |
-| 2 | Hold music | `HOLD_MUSIC_URL` | — *(Twilio's playlist)* |
-| 3 | Rejected | `REJECT_AUDIO_URL` | `REJECT_MESSAGE` |
-| 4 | Line closed | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE` |
-| 5 | Closing the line | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE` |
-| 6 | Accepted | — *(dialled to `HOST_PHONE_NUMBER`)* | — |
-
-Hold music is the one with no text fallback, because it is music: blank means
-Twilio's own classical playlist, which beats a robot voice on a loop.
-
-Audio settings take **an absolute URL or a bare filename** served from
-`backend/app/static/`. The filename form is what you want in development —
-`PUBLIC_BASE_URL` is a tunnel hostname that rotates and `.env` cannot
-interpolate it, so a pasted absolute URL goes stale on every restart. In
-production use a CDN so Twilio is not pulling audio through your API.
-
-`TTS_VOICE` is one setting for the whole service, not one per prompt: a show
-that speaks in two different synthetic voices sounds broken rather than varied.
-
-## Call history
-
-`GET /api/call-history` returns finished calls newest-first — accepted,
-rejected and dropped. It reads straight out of `CallRegistry`, which keeps the
-last `CALL_HISTORY_SIZE` (default 200) alongside the live ones, so it serves
-the same `Call` shape as the queue: one wire type for a call wherever it
-appears.
-
-The dashboard shows it in a separate tab from the live queue: the queue is a
-work surface where seconds matter, history is a record read at leisure.
-
-**It is in memory, so a restart clears it.** That is the trade for having no
-database, and it is the right one at this size — a screening decision is made
-within seconds, and the alternative was a SQLite file whose only reader was a
-list of recent calls. If you later need history to survive a deploy, that is
-the moment to add storage back, not before.
-
-## Surviving a restart
-
-Call state lives only in this process; callers on hold live in a Twilio
-`<Enqueue>` queue, which does not. A restart desynchronises the two in the
-worst direction — Twilio keeps playing hold music to people no operator can
-see, and **nothing ever fires to tell you they are there**. They aren't
-disconnected, they're stranded, which is harder to notice and worse for the
-caller.
-
-So on boot the service asks Twilio who is still waiting and puts them back:
-
-```
-GET /Queues.json               find the hold queue by name
-GET /Queues/{sid}/Members.json who is in it
-GET /Calls/{sid}.json          who each of them is
-```
-
-| Recovered | Lost |
-|---|---|
-| Call SID, caller number, the number they dialled, carrier caller-ID name, original start time | **The transcript**, and the city/state labels |
-
-The transcript only ever existed in the previous process's memory, and
-`FromCity`/`FromState` are webhook parameters Twilio doesn't keep on the Call
-resource. Recovered callers are therefore flagged — the queue row reads
-"Recovered after restart — reason unknown" instead of rendering the same blank
-as someone who said nothing, and the detail pane tells the operator to ask
-again.
-
-Three things worth knowing about the implementation:
-
-- **It runs in the background, not during startup.** Uvicorn doesn't accept
-  connections until lifespan startup returns, so blocking on a slow Twilio
-  would make the number refuse *new* calls in order to recover old ones.
-- **It never overwrites a live call.** A caller can be mid-webhook while it
-  runs; clobbering their transcript with a blank recovered row would destroy
-  the one thing that can't be recovered.
-- **Failure is survivable.** No credentials, no queue, or Twilio unreachable
-  all degrade to an empty queue and a log line.
-
-Needs `TWILIO_ACCOUNT_SID` plus an API key. Set `RECONCILE_ON_STARTUP=false`
-to turn it off.
-
-## On air and off air
-
-The header carries a `LINE OPEN` / `LINE CLOSED` pill and one button.
-
-**Closing the line does both halves of ending a show**, always:
-
-- new callers hear `CLOSED_LINE_MESSAGE` and are hung up — not queued where
-  nobody is watching, and not written to history, since a closed line should
-  not accumulate rows nobody will read;
-- anyone still on hold is played `CLOSING_MESSAGE` and disconnected, rather
-  than cut off with `Status=completed`. Someone who has waited ten minutes to
-  get on air deserves to be told the show is over, not dropped into silence
-  they will read as a bad line.
-
-It is one action deliberately: there is no state where some callers are left
-waiting on a line nobody is watching. The trade is that you cannot go off air
-and keep working through the queue you already have. If that turns out to
-matter, split the endpoint — `drain.py` is already separate from
-`line_state.py`.
-
-Closing asks first, in a modal that spells out both halves, because what it
-does is invisible: the callers it turns away are ones the operator will never
-see. Opening goes straight through.
-
-Note `<Say>` answers the call, so the seconds spent turning a caller away are
-billed; `<Reject>` would be free but gives a busy signal a listener reads as a
-broken number.
-
-The pill uses the same words as the button that changes it, and green is
-reserved for it alone — the connection badge beside it reads `Connected` in
-quiet white, because "Live" next to "On air" read as two opinions on the same
-question. Connection state stays visible (an empty queue and a dead socket look
-identical otherwise) but only shouts when it is wrong.
-
-The state is broadcast over the websocket, so every dashboard agrees — two
-operators disagreeing about whether the show is taking calls is how somebody
-gets put on air after it has ended. It is **in memory**, like everything else:
-a restart comes back to `LINE_OPEN_ON_START` (default open, so a deploy cannot
-silently take you off air mid-show).
-
-**Closing is not a shutdown hook**, deliberately. A deploy and a wrap-up arrive
-as the same SIGTERM, so draining on shutdown would hang up on live callers every
-time someone ships — and would make [reconciliation](#surviving-a-restart) dead
-code.
-
-Callers that could not be hung up are reported separately and **stay on the
-dashboard**, because they are still connected and still hearing hold music.
-The line closes either way. Hanging up needs the same REST credentials as
-reconciliation; turning new callers away needs none.
-
-## Going live
-
-1. Expose the backend publicly — Twilio dials in from the internet:
-   ```bash
-   ngrok http 8000
-   ```
-2. Set `PUBLIC_BASE_URL` to that origin. It builds the greeting URL and the
-   `action` URL on `<Gather>`, so `localhost` will not work.
-3. Point your number's voice webhook at `/webhook/incoming-call`.
-4. Point the number's **status callback** at `/webhook/call-status`. This one
-   is easy to skip and costly to skip: nothing else tells this service that a
-   caller hung up while on hold, so without it their card sits in the queue
-   until someone tries to put a dead line on air.
-5. Set `TWILIO_AUTH_TOKEN` and `VALIDATE_WEBHOOK_SIGNATURE=true`. Both webhooks
-   are public URLs; unsigned, anyone who finds them can fabricate a call or
-   inject words the caller never said.
-6. Set `TWILIO_ACCOUNT_SID` and an API key (`TWILIO_API_KEY_SID` /
-   `TWILIO_API_KEY_SECRET`) so the service can read the hold queue back on
-   boot — see [Surviving a restart](#surviving-a-restart). The auth token
-   works too, but an API key rotates independently of signature checking.
-7. Optionally enable **Caller ID Lookup** (`VoiceCallerIdLookup`) on the
-   number if you want caller names. It is off by default and billed per
-   lookup; without it `CallerName` is never sent and every caller shows as a
-   bare number.
-8. Check the greeting (`backend/app/static/greeting.mp3`) still says what you
-   want. It plays inside `<Gather>`, so it *is* the prompt — it has to ask the
-   caller to state their reason. Set `GREETING_AUDIO_URL` to host it
-   elsewhere.
-
-`SPEECH_MODEL` defaults to `phone_call`, which is tuned for 8kHz telephony
-audio. The default model is trained on wideband and does noticeably worse down
-a phone line.
-
-## Development without Docker
+### Without Docker
 
 ```bash
 make install
+```
+
+```bash
 cd backend && .venv/bin/python -m uvicorn app.main:app --reload
+```
+
+```bash
 cd frontend && npm run dev
 ```
 
-Node 24 and Python 3.12 are pinned in `.tool-versions`.
+### Before you push
 
 ```bash
-make check      # ruff + pytest + tsc
+make check
 ```
 
-## Design notes
+Ruff, the backend test suite, and a frontend typecheck. `make help` lists
+everything else.
 
-**One writer of call state.** Every mutation goes through `CallRegistry`, and
-every mutation publishes its event, so no code path can change a call without
-the dashboards hearing about it.
+---
 
-**The dashboard can't slow anything down.** Each connected dashboard gets a
-bounded queue; publishing uses `put_nowait` and drops the *oldest* event when a
-client falls behind. A backgrounded browser tab slows only itself.
+## Taking a real call
 
-**No persistence at all.** The webhook path touches no disk, so nothing can
-put a slow write in front of a ringing phone. It also means there is no schema,
-no migration story and no volume to manage.
+Twilio dials in from the internet, so it needs a public URL.
 
-**Single worker, on purpose.** Call state and the fan-out hub are in-process,
-so a second worker would see a different set of calls. See
-[docs/architecture.md](docs/architecture.md) for the scale-out path.
+**1. Open a tunnel.** This starts `cloudflared`, rewrites `PUBLIC_BASE_URL` in
+`.env`, and recreates the backend so it picks the new hostname up:
 
-## What is still a placeholder
+```bash
+make tunnel
+```
 
-| Area | State |
-| --- | --- |
-| Caller names | Requires Caller ID Lookup enabled on the number (paid, off by default). Without it every caller is a bare number |
-| Fallback URL | No `voiceFallbackUrl` configured, so a caller who arrives while this service is down hears Twilio's generic error |
-| Auth | No login on the dashboard and no authorisation on the API — including `POST /api/line/close`, which takes the show off air and hangs up on every live caller |
-| Providers | Twilio only. `<Gather input="speech">` has no direct equivalent elsewhere, so another provider means a real port, not a config change |
+**2. Point your Twilio number at it.** Console → Phone Numbers → your number →
+Voice Configuration. `make url` prints the base.
+
+| Field | Value |
+|---|---|
+| A call comes in | `<base>/webhook/incoming-call` |
+| Primary handler fails | a TwiML Bin saying "try again shortly" |
+| Call status changes | `<base>/webhook/call-status` |
+
+The other webhooks aren't configured here — their URLs are baked into the TwiML
+this service returns at each step.
+
+> ⚠️ A quick tunnel's hostname **rotates on every restart**, and all three
+> fields go stale together. `make tunnel` updates `.env` but can't update
+> Twilio. For anything beyond a test, use a named tunnel or a real deploy.
+
+**3. Set the host's phone**, or accepted callers get dialled nowhere:
+
+```bash
+HOST_PHONE_NUMBER=+15035551234
+```
+
+The service refuses to start on the placeholder outside `APP_ENV=local`.
+
+**4. Add Twilio credentials** so Accept, Reject and closing the line work:
+
+```bash
+TWILIO_ACCOUNT_SID=AC…
+TWILIO_API_KEY_SID=SK…
+TWILIO_API_KEY_SECRET=…
+TWILIO_AUTH_TOKEN=…          # signature checks need this one specifically
+VALIDATE_WEBHOOK_SIGNATURE=true
+```
+
+Both webhooks are public URLs. Unsigned, anyone who finds them can fabricate a
+call or put words in a caller's mouth.
+
+---
+
+## Reading the code
+
+Start at `backend/app/api/routes/webhooks.py` — the whole call flow is four
+handlers, in order:
+
+| Endpoint | Returns | Caller hears |
+|---|---|---|
+| `incoming-call` | `<Gather>` with the greeting inside | the greeting, then silence while Twilio listens |
+| `speech-result` | `<Enqueue>` | hold music |
+| `queue-exit` | empty | *(they left the queue)* |
+| `dial-complete` | `<Hangup>` | *(their time with the host ended)* |
+
+Then:
+
+- `telephony/twiml.py` — the XML documents, one function each
+- `services/call_registry.py` — the single writer of call state
+- `services/decisions.py` — accept and reject
+- `frontend/src/hooks/useCallStream.ts` — one socket, one reducer
+
+**One rule explains most of the design:** the dashboard must never claim
+something the phone line didn't do. Twilio acts first, local state follows, and
+a command that fails leaves the call visible rather than quietly resolved.
+
+`docs/architecture.md` has the why — the trade-offs, the failure modes, and
+what to change when the assumptions stop holding.
+
+---
+
+## What the caller hears
+
+Six moments, each an **audio file with a spoken fallback**. Set the audio and
+it plays; otherwise Twilio speaks the text in `TTS_VOICE`.
+
+| Moment | Audio | Fallback |
+|---|---|---|
+| Greeting — *also the prompt* | `GREETING_AUDIO_URL` | `GREETING_MESSAGE` |
+| Hold music | `HOLD_MUSIC_URL` | *(Twilio's playlist)* |
+| Rejected | `REJECT_AUDIO_URL` | `REJECT_MESSAGE` |
+| Line closed | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE` |
+| Closing the line | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE` |
+| Accepted | *(dialled to `HOST_PHONE_NUMBER`)* | — |
+
+Audio settings take an absolute URL **or a bare filename** served from
+`backend/app/static/`. Use the filename in development — the tunnel hostname
+rotates and `.env` can't interpolate it. Use a CDN in production.
+
+---
+
+## Using it during a show
+
+**On air / off air.** The footer toggles the line. Closing it turns new callers
+away *and* hangs up on anyone still holding — one action, so nobody is left
+waiting on a line nobody is watching. It asks first.
+
+**Call History** shows finished calls, and marks which ones actually made it on
+air and for how long. It's in memory, so it clears when the backend restarts.
+
+**A restart mid-show doesn't strand callers.** On boot the service asks Twilio
+who is still in the hold queue and puts them back on the dashboard. Their
+transcript can't be recovered — it only ever existed in memory — so those rows
+say so rather than looking like a caller who stayed silent.
+
+---
+
+## Not done yet
+
+| | |
+|---|---|
+| Auth | No login on the dashboard, no authorisation on the API — including the endpoint that takes the show off air and hangs up on every caller |
+| One on-air slot | Accepting a second caller while one is live dials a busy host. Nothing prevents it; the outcome is reported honestly |
+| Caller names | Needs Caller ID Lookup on the number (paid, off by default) |
+| Single worker | Call state and dashboard fan-out are in-process — see `docs/architecture.md` |

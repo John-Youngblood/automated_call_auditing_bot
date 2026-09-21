@@ -20,6 +20,11 @@ set -euo pipefail
 PORT="${1:-8000}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 URL_FILE="$ROOT/.tunnel-url"
+
+# Read just this one value out of .env rather than sourcing the file, which
+# would pull in credentials and break on any quoted or spaced value.
+FRONTEND_PORT="$(sed -n 's/^FRONTEND_PORT=\([0-9][0-9]*\).*/\1/p' "$ROOT/.env" 2>/dev/null | tail -1)"
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 LOG="$(mktemp -t call-screener-tunnel)"
 
 command -v cloudflared >/dev/null || {
@@ -80,7 +85,7 @@ cat <<EOF
        A call comes in      $URL/webhook/incoming-call
        Call status changes  $URL/webhook/call-status
 
-  Dashboard: http://localhost:\${FRONTEND_PORT:-5173}
+  Dashboard: http://localhost:$FRONTEND_PORT
 
   Ctrl-C to close the tunnel.
 

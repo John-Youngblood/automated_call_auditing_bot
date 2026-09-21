@@ -3,6 +3,89 @@
 Companion to the README: why the structure is what it is, and what to change
 when the assumptions stop holding.
 
+## Layout
+
+```
+backend/app/
+  main.py                composition root: builds the singletons, wires routes
+  config.py              the only reader of the environment
+  api/
+    deps.py              app.state -> route dependencies
+    routes/webhooks.py   the four Twilio webhooks, in call order
+    routes/calls.py      accept / reject / history / line open+close
+    routes/frontend.py   WS /ws/frontend
+  services/
+    call_registry.py     single writer of call state, live + recent
+    broadcaster.py       bounded-queue fan-out to dashboards
+    decisions.py         accept and reject, carrier-first
+    drain.py             hang up on holders when the line closes
+    line_state.py        on air / off air, broadcast to dashboards
+    reconcile.py         rebuild the queue from Twilio on boot
+    phone.py             caller location labels
+  telephony/             everything Twilio-specific
+    twiml.py             the five XML documents
+    rest.py              the four REST endpoints we call
+    signature.py         webhook authenticity
+  static/                bundled audio, served at /static
+
+frontend/src/
+  hooks/useCallStream.ts one socket, one reducer
+  hooks/useCallHistory.ts history is a plain HTTP read
+  components/            presentational only
+  types/events.ts        mirrors backend/app/schemas/
+```
+
+## The call flow, and why it is shaped that way
+
+Four details are load-bearing and easy to undo by accident:
+
+- **`<Play>` sits inside `<Gather>`**, so the greeting doubles as the prompt
+  and Twilio is already listening as it finishes. A caller who talks over the
+  greeting is still heard.
+- **`speechTimeout` is a number, never `"auto"`.** It is what makes this
+  turn-based: Twilio decides when the caller stopped and posts the finished
+  transcript. Not `auto` for two reasons — Twilio warns (error 13335) when it
+  is combined with a `speechModel`, and `auto` stops at the *first* pause,
+  which truncates anyone mid-explanation. Fine for "say your account number",
+  wrong for "tell us why you are calling".
+- **`<Enqueue action>` is the only report of abandonment.** Nothing keeps a
+  connection to this service while a caller holds, so without it a caller who
+  gives up leaves no trace and their card sits on the dashboard until someone
+  tries to put a dead line on air.
+- **`<Dial action>` is the only report of the on-air outcome**, and it changes
+  `<Dial>`'s behaviour: instead of ending the call when the dial finishes,
+  Twilio keeps the *caller's* leg alive and hands control back. Whatever serves
+  that URL must hang up, or a caller sits connected to silence after the host
+  hangs up.
+
+`actionOnEmptyResult` and the trailing `<Redirect>` cover the same risk from
+both sides: a silent caller still reaches the dashboard, and a `<Gather>` that
+falls through lands back on the same endpoint rather than running off the end
+of the document.
+
+## Prompts: audio with a spoken fallback
+
+Every caller-audible moment is a pair — an audio URL and text. Audio wins;
+otherwise Twilio speaks the text in one `TTS_VOICE`. One voice for the service,
+not one per prompt: a show that speaks in two synthetic voices sounds broken
+rather than varied.
+
+Audio settings accept an absolute URL or a bare filename under `app/static`.
+The filename form exists because `PUBLIC_BASE_URL` is a tunnel hostname that
+rotates in development and `.env` cannot interpolate it, so a pasted absolute
+URL goes stale on every restart. A filename is rebuilt against the current base
+per request.
+
+Two deliberate asymmetries:
+
+- The **greeting** falls back to the bundled `greeting.mp3` when it is on disk,
+  then to text. A call with no greeting is a caller sitting in silence, so it
+  always resolves to something.
+- **Hold music** has no bundled default. Blank omits `waitUrl` entirely and
+  Twilio plays its own playlist, which beats a `<Play>` pointing at a file that
+  may not exist. It is also the one prompt with no text fallback, because it is
+  music.
+
 ## Dependency direction
 
 ```

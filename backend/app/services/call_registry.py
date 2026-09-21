@@ -1,17 +1,12 @@
 """Authoritative state for calls, live and recently finished.
 
-Single writer of truth: every mutation goes through a method here, and every
-method publishes the matching event. Route handlers stay thin and no code path
-can change a call without the dashboards hearing about it.
+Single writer: every mutation goes through a method here and publishes the
+matching event, so no code path can change a call without the dashboards
+hearing about it.
 
-Everything lives in memory. One dict holds both the calls being screened and
-the last :attr:`history_size` finished ones, which is what the Call History
-view reads -- so a finished call is not moved or copied anywhere, it simply
-stops being open. Nothing is written to disk.
-
-That means history resets when the process restarts. Acceptable for a screening
-queue: decisions are made within seconds, a show runs for a couple of hours, and
-the alternative is a database whose only reader is a list of recent calls.
+One dict holds both the calls being screened and the last ``history_size``
+finished ones -- a call does not move when it finishes, it just stops being
+open. All in memory, so history resets on restart. See docs/architecture.md.
 """
 
 from __future__ import annotations
@@ -57,11 +52,7 @@ class CallRegistry:
         )
 
     def recent_calls(self, limit: int | None = None) -> list[Call]:
-        """Finished calls, newest first. The Call History view.
-
-        Bounded by ``history_size`` regardless of ``limit``: anything older has
-        already been evicted by :meth:`_prune_terminal`.
-        """
+        """Finished calls, newest first. Bounded by ``history_size``."""
         finished = sorted(
             (c for c in self._calls.values() if not c.is_open),
             key=lambda c: c.ended_at or c.started_at,
@@ -81,8 +72,8 @@ class CallRegistry:
     ) -> Call:
         """Record a call from the provider webhook.
 
-        Idempotent: providers retry webhooks, and a retry must not create a
-        duplicate row in the queue.
+        Idempotent: Twilio retries webhooks, and a retry must not duplicate
+        the queue row.
         """
         existing = self._calls.get(call_id)
         if existing is not None:
@@ -105,15 +96,10 @@ class CallRegistry:
     ) -> Call | None:
         """Put a caller Twilio still has on hold back on the dashboard.
 
-        Goes straight to ON_HOLD: they are past the greeting and the gather,
-        which is why Twilio has them queued at all. There is no transcript to
-        restore -- it only ever lived in the previous process's memory -- so
-        ``recovered`` is set and the UI says as much.
-
-        Returns ``None`` when the call is already known, which is the race
-        worth getting right: a caller can be mid-webhook while reconciliation
-        runs, and overwriting a live call that already has its transcript with
-        a blank recovered one would destroy the very thing that survived.
+        Straight to ON_HOLD: being queued at Twilio means they are past the
+        greeting. Returns ``None`` if the call is already known -- a caller can
+        be mid-webhook while this runs, and clobbering their transcript with a
+        blank recovered row would destroy the one thing that survived.
         """
         if call_id in self._calls:
             return None
@@ -126,9 +112,8 @@ class CallRegistry:
             recovered=True,
         )
         if started_at is not None:
-            # Keep the caller's real start time so the queue timer shows how
-            # long they have actually been waiting, not how long since we
-            # rebooted. That number is what decides who to take first.
+            # Their real start time, not ours -- the queue sorts by it, so
+            # using "now" would send everyone recovered to the back.
             call.started_at = started_at
         self._calls[call_id] = call
         logger.info(
@@ -145,8 +130,7 @@ class CallRegistry:
     ) -> Call | None:
         """Record what the caller said and move them to awaiting a decision.
 
-        Arrives complete, in one webhook, once the caller stops speaking --
-        so there is nothing partial to reconcile and no ordering to get right.
+        Arrives complete in one webhook, so there is no partial state.
         """
         call = self._calls.get(call_id)
         if call is None:
@@ -158,10 +142,8 @@ class CallRegistry:
         if call.status is CallStatus.SCREENING:
             call.status = CallStatus.ON_HOLD
 
-        # Length at INFO, content at DEBUG. A transcript is a member of the
-        # public talking about themselves, so writing it into container logs
-        # should be a choice someone makes rather than the default. Set
-        # LOG_LEVEL=DEBUG locally when you want to read them.
+        # Content at DEBUG only: a transcript is a member of the public
+        # talking about themselves, so logging it should be a choice.
         logger.info(
             "transcript call_id=%s confidence=%s chars=%s", call_id, confidence, len(text or "")
         )
@@ -175,14 +157,9 @@ class CallRegistry:
             return call
         call.status = status
         if status is CallStatus.ACCEPTED:
-            # Sticky, because ACCEPTED is not: it gets replaced by ENDED once
-            # the bridge finishes, and "this caller made it on air" has to
-            # outlive that.
             call.was_accepted = True
-        # A terminal status ends *screening*, so stamp the time here. An
-        # accepted call may well continue with a human, but as far as this
-        # dashboard is concerned it is done -- without this the queue's
-        # duration timer keeps counting up on calls nobody is screening.
+        # A terminal status ends *screening*, so stamp the time here -- without
+        # it the queue timer keeps counting on calls nobody is screening.
         if status in TERMINAL_STATUSES and call.ended_at is None:
             call.ended_at = datetime.now(UTC)
         logger.info("call status call_id=%s -> %s", call_id, status)
@@ -199,9 +176,7 @@ class CallRegistry:
     def end_on_air(self, call_id: str, seconds: int | None = None) -> Call | None:
         """Record how long a caller was on air, and mark the call over.
 
-        ``seconds`` is Twilio's DialCallDuration. Leaving it ``None`` is how a
-        bridge that never connected is distinguished from a short one, so it
-        is not defaulted to zero.
+        ``None`` seconds is meaningful: the bridge never connected. Not zero.
         """
         call = self._calls.get(call_id)
         if call is None:
@@ -216,12 +191,8 @@ class CallRegistry:
             return None
         if call.ended_at is None:
             call.ended_at = datetime.now(UTC)
-        # REJECTED survives: we hung up on them, so the call ending afterwards
-        # is a consequence of that decision rather than a new outcome, and
-        # "rejected" is the thing an operator needs to see later.
-        #
-        # ACCEPTED does not. It means "on air right now", so once the call is
-        # over it has to stop saying that -- whichever end hung up first.
+        # REJECTED survives -- we hung up on them, so the call ending is a
+        # consequence of that. ACCEPTED does not: it means "on air right now".
         if call.status is not CallStatus.REJECTED:
             call.status = CallStatus.ENDED
         self._publish(ServerEventType.CALL_ENDED, call)
@@ -233,18 +204,13 @@ class CallRegistry:
         self._calls.pop(call_id, None)
 
     def publish(self, event: ServerEvent) -> None:
-        """Publish an event that is not itself a state change (stream health,
-        errors). Keeps the broadcaster private to this class."""
+        """Publish an event that is not a state change. Keeps the broadcaster
+        private to this class."""
         self._broadcaster.publish(event.to_wire())
 
     # -- internals ----------------------------------------------------------
     def _prune_terminal(self) -> None:
-        """Drop the oldest finished calls.
-
-        This is the only thing bounding memory, and it is also what makes
-        ``history_size`` the real retention limit: nothing else removes an
-        entry, so without it ``_calls`` would grow for the life of the process.
-        """
+        """Drop the oldest finished calls. The only thing bounding memory."""
         finished = sorted(
             (call for call in self._calls.values() if not call.is_open),
             key=lambda call: call.ended_at or call.started_at,

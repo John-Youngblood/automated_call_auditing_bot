@@ -1,11 +1,9 @@
 /**
  * REST client for screening decisions.
  *
- * Decisions go over HTTP rather than the websocket on purpose: they are
- * one-shot actions where the caller needs to know whether it worked, and a
- * status code gives that directly. The websocket stays a one-way stream of
- * state. The resulting change still arrives back through the socket, so every
- * open dashboard updates either way.
+ * Over HTTP rather than the socket because a decision either worked or did
+ * not, and a status code says which. The change still arrives back over the
+ * socket, so every open dashboard updates either way.
  */
 
 import type { Call, LineStateResult } from '../types/events';

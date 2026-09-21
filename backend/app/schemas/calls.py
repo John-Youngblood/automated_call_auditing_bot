@@ -10,11 +10,7 @@ from pydantic.alias_generators import to_camel
 
 
 class CamelModel(BaseModel):
-    """Base model that speaks snake_case in Python and camelCase on the wire.
-
-    Keeps the TypeScript client idiomatic without littering the Python side
-    with aliases. Always serialise with ``by_alias=True``.
-    """
+    """snake_case in Python, camelCase on the wire. Serialise with by_alias."""
 
     model_config = ConfigDict(
         alias_generator=to_camel,
@@ -27,9 +23,8 @@ class CallStatus(StrEnum):
     #: The greeting has played and the caller is saying why they are calling.
     #: Twilio is listening; there is nothing to act on yet.
     SCREENING = "screening"
-    #: The caller has finished and their transcript is on the dashboard. They
-    #: are on hold, waiting for an operator to decide.
-    #: Hyphenated because this value is also used as a CSS class suffix.
+    #: Transcript is in; waiting for an operator. Hyphenated because the value
+    #: doubles as a CSS class suffix.
     ON_HOLD = "on-hold"
     ACCEPTED = "accepted"
     #: A human declined the call.
@@ -38,10 +33,8 @@ class CallStatus(StrEnum):
     ENDED = "ended"
 
 
-#: Statuses a call cannot leave. Defined once here so the queue filter and the
-#: history view cannot drift apart -- they did once, and a resolved call stayed
-#: in the live queue as a result.
-#: Mirrored in frontend/src/types/events.ts.
+#: Statuses a call cannot leave. Defined once so the queue filter and the
+#: history view cannot drift apart. Mirrored in frontend/src/types/events.ts.
 TERMINAL_STATUSES = frozenset(
     {
         CallStatus.ACCEPTED,
@@ -82,32 +75,21 @@ class Call(CamelModel):
     #: to make a decision from.
     transcript_confidence: float | None = None
 
-    #: True once an operator pressed Accept. Survives the call ending, which
-    #: ACCEPTED does not -- that status means "on air right now" and is
-    #: replaced by ENDED when the bridge finishes. Without this, history could
-    #: not tell a caller who made it on air from one who hung up while being
-    #: screened: both end up ENDED.
+    #: Sticky, unlike ACCEPTED -- which becomes ENDED once the bridge
+    #: finishes. Without this, history cannot tell a caller who made it on air
+    #: from one who hung up while being screened; both read "ended".
     was_accepted: bool = False
 
-    #: Seconds the caller actually spent talking to the host, from Twilio's
-    #: DialCallDuration. None alongside ``was_accepted`` is meaningful rather
-    #: than missing: it says the bridge never connected -- the usual cause
-    #: being the host already on air with someone else.
+    #: Twilio's DialCallDuration. None alongside ``was_accepted`` means the
+    #: bridge never connected, usually because the host was already on a call.
     on_air_seconds: int | None = None
 
-    #: True when this call was rebuilt from Twilio at startup rather than seen
-    #: arrive. Such a call is genuinely on hold, but its transcript died with
-    #: the previous process -- so the dashboard has to say so rather than
-    #: showing a silent caller with no stated reason, which looks identical to
-    #: someone who said nothing.
+    #: Rebuilt from Twilio after a restart, so genuinely on hold but with no
+    #: transcript -- which otherwise looks identical to a caller who said
+    #: nothing. See app/services/reconcile.py.
     recovered: bool = False
 
     @property
     def is_open(self) -> bool:
-        """Whether the call still belongs in the live screening queue.
-
-        ACCEPTED counts as closed: the call may well continue with a human,
-        but it is no longer being screened, and leaving it here meant accepted
-        calls accumulated in every snapshot for the life of the process.
-        """
+        """Still in the live screening queue. ACCEPTED counts as closed."""
         return self.status not in TERMINAL_STATUSES

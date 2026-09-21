@@ -1,25 +1,11 @@
 """Clearing whoever is still holding.
 
-The counterpart to :mod:`app.services.reconcile`. Reconciliation exists because
-a restart must not strand the people holding; this exists because *ending the
-show* must not strand them either. Both solve the same underlying problem --
-Twilio will hold a caller forever and never tell us -- from opposite ends.
+Reached by closing the line, which does both halves in one action so no caller
+is left waiting on a line nobody is watching. Each is played a goodbye rather
+than cut off, since they have been waiting to get on air.
 
-Called by closing the line (:mod:`app.services.line_state` handles the flag;
-``POST /api/line/close`` does both). Closing is one action on purpose: no
-caller is ever left waiting on a line nobody is watching. The trade is that
-you cannot go off air and keep working the queue you already have -- if that
-turns out to matter, split the endpoint, not this module.
-
-Deliberately an operator action rather than a shutdown hook. A deploy and a
-wrap-up arrive as the same SIGTERM, so draining on shutdown would hang up on
-live callers every time someone ships a change, and would make the recovery
-path dead code.
-
-Each caller is redirected out of the queue into a short goodbye and then hung
-up, rather than cut off with ``Status=completed``. Someone who has waited ten
-minutes to get on air should be told the show is over, not dropped into
-silence that is indistinguishable from a bad line.
+An operator action, never a shutdown hook: a deploy and a wrap-up arrive as the
+same SIGTERM. See docs/architecture.md.
 """
 
 from __future__ import annotations
@@ -48,12 +34,8 @@ _DEADLINE_SECONDS = 20.0
 
 @dataclass(slots=True)
 class DrainResult:
-    """What the click actually accomplished, reported honestly.
-
-    ``failed`` matters: a caller we could not hang up is still connected and
-    still hearing hold music, and the operator needs to know that rather than
-    having silence imply success.
-    """
+    """``failed`` matters: those callers are still connected and still hearing
+    hold music, so silence must not imply success."""
 
     ended: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
@@ -65,13 +47,11 @@ class DrainResult:
 async def hang_up_holders(registry: CallRegistry, settings: Settings) -> DrainResult:
     """Hang up on everyone currently being screened or holding.
 
-    Only reached via closing the line, which sets the flag first -- so a
-    caller dialling while this runs is turned away rather than joining a queue
-    that is being emptied.
+    Closing the line sets the flag first, so a caller dialling while this runs
+    is turned away rather than joining a queue being emptied.
 
-    Never raises. Marks each call ENDED locally only *after* Twilio confirms,
-    so a caller we failed to reach stays visible on the dashboard for a human
-    to deal with instead of disappearing from the queue while still connected.
+    Never raises. Marks ENDED only *after* Twilio confirms, so a caller we
+    failed to reach stays visible rather than vanishing while still connected.
     """
     open_calls = registry.open_calls()
     if not open_calls:

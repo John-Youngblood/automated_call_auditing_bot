@@ -1,20 +1,12 @@
 """Accepting and rejecting a caller -- the half that reaches the caller.
 
-Both decisions were placeholders until now, and the reject one was the more
-dangerous of the two. Marking a call REJECTED takes it out of ``open_calls``,
-so it leaves the dashboard; without a carrier command the caller stayed in
-Twilio's hold queue hearing music. They were stranded *and* invisible: not in
-the queue, not cleared by closing the line (which only walks open calls), not
-recovered by reconciliation, still billed by the minute, and still holding a
-slot against Twilio's 1000-call queue cap -- until they gave up.
+Ordering rule, shared with :mod:`app.services.drain`: Twilio acts first, local
+state follows. A decision we could not deliver leaves the call where it was, so
+the dashboard is never more optimistic than the phone line.
 
-Accept had the same shape but fails loudly in practice: nobody comes on air
-and you notice within seconds. Reject looked completely fine on the dashboard,
-which is exactly why it needed fixing first.
-
-Ordering rule, shared with :mod:`app.services.drain`: the carrier acts first
-and local state follows. A decision we could not deliver leaves the call where
-it was, so the dashboard is never more optimistic than the phone line.
+That matters most for reject. REJECTED takes a call out of ``open_calls``, so
+it leaves the dashboard -- if the hang-up silently failed, the caller would
+still be in Twilio's hold queue, invisible and billed, until they gave up.
 """
 
 from __future__ import annotations
@@ -31,26 +23,21 @@ logger = logging.getLogger(__name__)
 class TelephonyUnavailable(RuntimeError):
     """No usable Twilio credentials, so a decision cannot reach the caller.
 
-    Deliberately an error rather than a silent success. An earlier placeholder
-    client logged the command and returned True, which made accept and reject
-    look like they worked in any environment without credentials -- the whole
-    point of a screening dashboard is that what it shows matches what the
-    caller is experiencing.
+    An error rather than a silent success: the point of the dashboard is that
+    what it shows matches what the caller is experiencing.
     """
 
 
-#: Where Twilio reports the outcome of a bridge. Kept beside the route that
-#: serves it rather than imported, to avoid services depending on routes.
+#: Where Twilio reports the outcome. Declared here rather than imported from
+#: the route, so services do not depend on routes.
 DIAL_COMPLETE_PATH = "/webhook/dial-complete"
 
 
 async def put_on_air(call_id: str, destination: str, settings: Settings) -> bool:
-    """Bridge a held caller to a human.
+    """Bridge a held caller to the host.
 
-    ``destination`` is whatever the operator answers on. Strict about
-    success: a call that has already ended is a *failure* here, because
-    nobody is being connected and showing the operator a live guest who hung
-    up thirty seconds ago is worse than showing them an error.
+    Strict about success: a call that has already ended is a *failure* here,
+    because nobody is being connected.
     """
     client = client_from_settings(settings)
     if client is None:
@@ -75,8 +62,8 @@ async def put_on_air(call_id: str, destination: str, settings: Settings) -> bool
 async def turn_away(call_id: str, settings: Settings) -> bool:
     """Tell a caller they are not getting on air, then hang up.
 
-    Lenient about a call that has already ended -- the goal is "this caller is
-    no longer holding", which a caller who hung up first has satisfied.
+    Lenient about a call that has already ended: the goal is "no longer
+    holding", which a caller who hung up first has satisfied.
     """
     client = client_from_settings(settings)
     if client is None:

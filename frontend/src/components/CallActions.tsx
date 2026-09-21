@@ -12,10 +12,9 @@ interface Props {
 /**
  * The decisions an operator can make about the active call.
  *
- * Both hit placeholder backend endpoints
- * (`POST /api/calls/{id}/accept|reject`): the status change and its broadcast
- * to every dashboard are real, while bridging or declining at the carrier is
- * still a stub. See `backend/app/telephony/provider_client.py`.
+ * `POST /api/calls/{id}/accept|reject`. Both reach Twilio before the status
+ * changes, so a failure leaves the call on the dashboard — see
+ * `backend/app/services/decisions.py`.
  */
 export default function CallActions({ call, pending, onAccept, onReject }: Props) {
   if (isTerminal(call.status)) {

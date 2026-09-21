@@ -8,11 +8,9 @@
     POST /api/line/open
     POST /api/line/close
 
-The decision endpoints exist alongside the equivalent websocket commands on
-purpose. A decision is a one-shot action that either succeeded or did not, and
-HTTP gives the dashboard a status code and a retry story for it; the websocket
-stays a streaming channel. The resulting state change still reaches every
-dashboard through the broadcaster, so all of them stay in sync either way.
+The decision endpoints duplicate the websocket commands on purpose: a decision
+either succeeded or did not, and HTTP gives the dashboard a status code for it.
+The resulting state change still reaches every dashboard over the socket.
 """
 
 from __future__ import annotations
@@ -44,11 +42,10 @@ async def call_history(
     settings: SettingsDep,
     limit: int | None = Query(default=None, ge=1, le=500),
 ) -> list[Call]:
-    """Accepted, rejected and dropped calls, newest first.
+    """Finished calls, newest first.
 
-    Read straight out of the registry, so this is the same ``Call`` shape the
-    queue serves -- one wire type for a call wherever it appears. Held in
-    memory only: the list starts empty after a restart.
+    Same ``Call`` shape the queue serves -- one wire type wherever a call
+    appears. In memory only, so the list starts empty after a restart.
     """
     return registry.recent_calls(limit=limit or settings.call_history_size)
 
@@ -63,11 +60,10 @@ async def get_call(call_id: str, registry: RegistryDep) -> Call:
 
 @router.post("/calls/{call_id}/accept", summary="Connect the call to a human")
 async def accept_call(call_id: str, registry: RegistryDep, settings: SettingsDep) -> Call:
-    """Bridge the call to a human and mark it accepted.
+    """Bridge the call to the host and mark it accepted.
 
-    Twilio acts first: if the bridge fails the call keeps its current status
-    and stays on the dashboard, rather than being marked accepted while the
-    caller is still sitting on hold.
+    Twilio acts first: a failed bridge leaves the call on the dashboard rather
+    than marked accepted while the caller is still on hold.
     """
     call = _require(registry, call_id)
     destination = settings.host_phone_number
@@ -86,10 +82,8 @@ async def accept_call(call_id: str, registry: RegistryDep, settings: SettingsDep
 async def reject_call(call_id: str, registry: RegistryDep, settings: SettingsDep) -> Call:
     """Tell the caller they are not getting on air, then mark it rejected.
 
-    Same ordering rule as :func:`accept_call`, and it matters more here. A
-    rejected call leaves the live queue, so if the hang-up silently failed the
-    caller would be stranded on hold *and* invisible -- see
-    app/services/decisions.py.
+    Same ordering as :func:`accept_call`, and it matters more here: a rejected
+    call leaves the queue, so a silent failure would strand them invisibly.
     """
     call = _require(registry, call_id)
 
@@ -106,9 +100,8 @@ async def reject_call(call_id: str, registry: RegistryDep, settings: SettingsDep
 class LineStateResponse(CamelModel):
     """Whether the line is taking calls, and what closing it did to the queue.
 
-    ``failed`` is reported separately because those callers are still
-    connected and still hearing hold music. Silence would let an operator walk
-    away believing the line was clear.
+    ``failed`` matters: those callers are still connected, so silence must not
+    let an operator walk away believing the line was clear.
     """
 
     open: bool
@@ -132,15 +125,9 @@ async def close_line(
 ) -> LineStateResponse:
     """End the show, in one action.
 
-    Closes the line to new callers *and* hangs up on anyone still holding,
-    always -- there is no version of this where some callers are left on a
-    line nobody is watching. The order matters: close first, so a caller
-    dialling during the hang-ups is turned away rather than joining a queue
-    that is being emptied.
-
-    Deliberately not a shutdown hook: a deploy and a wrap-up arrive as the
-    same signal, and draining on every restart would hang up on live callers
-    each time someone ships. See app/services/drain.py.
+    Closes to new callers *and* hangs up on anyone still holding. Close first,
+    so a caller dialling mid-drain is turned away rather than joining a queue
+    being emptied. Not a shutdown hook -- see app/services/drain.py.
     """
     line.set_open(False)
     result = await drain_queue(registry, settings)

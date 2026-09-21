@@ -17,11 +17,10 @@ The flow:
               ▼
          <Enqueue> caller holds while an operator reads it and decides
 
-Twilio owns the hard part -- deciding when the caller stopped speaking -- which
-is why there is no audio streaming anywhere in this service.
+Twilio owns the hard part -- deciding when the caller stopped speaking -- so
+there is no audio streaming anywhere in this service.
 
-Keep these handlers fast. Twilio waits a couple of seconds and then plays an
-error to the caller, so CRM lookups and anything else slow belongs elsewhere.
+Keep these handlers fast: Twilio times out and plays the caller an error.
 """
 
 from __future__ import annotations
@@ -61,10 +60,8 @@ async def _form(request: Request) -> dict[str, str]:
     """Twilio posts ``application/x-www-form-urlencoded``, always."""
     form = await request.form()
     params = {str(k): str(v) for k, v in form.items()}
-    # At DEBUG only: these carry the caller's number. Invaluable when a field
-    # you expected is missing -- Twilio sends some geographic parameters as
-    # empty strings rather than omitting them, which is indistinguishable from
-    # "absent" unless you can see the raw body.
+    # DEBUG only -- these carry the caller's number. Worth having: Twilio
+    # sends some fields as empty strings rather than omitting them.
     logger.debug("%s params=%r", request.url.path, params)
     return params
 
@@ -72,10 +69,9 @@ async def _form(request: Request) -> dict[str, str]:
 def _check_signature(request: Request, params: dict[str, str], settings: SettingsDep) -> None:
     """Reject anything Twilio did not send, when validation is enabled.
 
-    The URL is rebuilt from ``PUBLIC_BASE_URL`` rather than ``request.url``:
-    the signature covers the URL Twilio *requested*, which behind a tunnel or
-    load balancer is not the one this process observes. Trusting
-    ``X-Forwarded-*`` instead would let a caller forge it.
+    The URL is rebuilt from ``PUBLIC_BASE_URL``, not ``request.url``: the
+    signature covers the URL Twilio *requested*, which behind a tunnel is not
+    what this process sees. Trusting ``X-Forwarded-*`` would let it be forged.
     """
     if not settings.validate_webhook_signature:
         return
@@ -122,13 +118,10 @@ async def incoming_call(
     number = params.get("From") or None
     caller = Caller(
         number=number,
-        # Twilio only sends CallerName if Caller ID Lookup is enabled on the
-        # number (VoiceCallerIdLookup), which is a paid per-lookup feature.
-        # Off by default -- so without it this is always None and every caller
-        # shows as a bare number.
+        # Only sent when Caller ID Lookup is enabled on the number (paid, off
+        # by default), so usually None.
         name=params.get("CallerName") or None,
-        # Twilio derives these from the number's rate centre, not from where
-        # the caller is -- see format_location.
+        # Where the *number* is registered, not the caller -- see phone.py.
         location=format_location(
             params.get("FromCity"),
             params.get("FromState"),
@@ -136,10 +129,8 @@ async def incoming_call(
         ),
     )
 
-    # Off air: turn them away before anything else. Deliberately not
-    # registered -- a caller who was never screened does not belong in the
-    # queue or the history, and a closed line should not silently accumulate
-    # rows nobody will read.
+    # Off air. Deliberately not registered: a caller who was never screened
+    # does not belong in the queue or in history.
     if not line.is_open:
         logger.info("line closed, turning away call_id=%s from=%s", call_id, caller.number)
         return _twiml(
@@ -178,11 +169,9 @@ async def speech_result(
 ) -> Response:
     """Twilio posts here once it detects the caller has stopped speaking.
 
-    ``SpeechResult`` is the finished transcript and ``Confidence`` is how much
-    Twilio trusts it. Both can be absent -- a caller who stayed silent still
-    reaches this endpoint (``actionOnEmptyResult``), and they should still show
-    up on the dashboard so an operator can deal with them rather than having
-    the call vanish.
+    Both ``SpeechResult`` and ``Confidence`` can be absent: a silent caller
+    still reaches here (``actionOnEmptyResult``) and should still reach the
+    dashboard rather than vanishing.
     """
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -222,14 +211,10 @@ async def queue_exit(
 ) -> Response:
     """Twilio requests this when a call leaves the hold queue.
 
-    ``QueueResult`` says why. ``hangup`` is the one that matters: the caller
-    gave up waiting, and this is the only thing that tells us -- nothing keeps
-    a connection to this service while they hold. ``QueueTime`` is how long
-    they waited, worth logging because a rising abandon time means the queue
-    is too slow.
-
-    ``bridged`` and ``redirected`` mean they were connected to a human, so the
-    decision already recorded stands and this leaves it alone.
+    ``QueueResult=hangup`` is the one that matters -- the only thing that
+    tells us a caller gave up, since nothing keeps a connection while they
+    hold. ``bridged`` and ``redirected`` mean they reached a human, so the
+    decision already recorded stands.
     """
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -244,11 +229,8 @@ async def queue_exit(
     else:
         logger.info("queue exit call_id=%s result=%s after=%ss", call_id, result, waited)
 
-    # An action URL controls call flow, so this returns TwiML rather than the
-    # 204 a status callback wants. An empty document means "nothing further":
-    # correct for a caller who already hung up, and harmless for one being
-    # bridged, whose new instructions came from the redirect that dequeued
-    # them. Worth re-checking once the REST accept path is real.
+    # An action URL controls call flow, so TwiML rather than the 204 a status
+    # callback wants. Empty means "nothing further".
     return _twiml(RenderedResponse(body=_EMPTY_RESPONSE))
 
 
@@ -271,19 +253,14 @@ async def dial_complete(
     """Twilio reports how the bridge to the host went.
 
     Either way the call is over, so it is marked ENDED. ``completed`` means
-    they talked -- the interesting part is how long, which is the only place
-    that number exists. Anything else means the host never picked up, most
-    likely because they were already on air with someone else, and that caller
-    was never connected at all despite the dashboard saying ACCEPTED.
+    they talked, and ``DialCallDuration`` is the only place that length
+    exists. Anything else means the host never picked up -- usually because
+    they were already on air -- so that caller was never connected despite the
+    dashboard saying ACCEPTED.
 
-    The ``<Hangup>`` is load-bearing, not decoration. Adding an ``action`` URL
-    changes what ``<Dial>`` does when it finishes: instead of falling off the
-    end of the document, Twilio keeps the *caller's* leg alive and hands
-    control back here. So when the host hangs up first, that caller is still
-    connected and listening to nothing until we say otherwise. An empty
-    document would also end the call, but only as a side effect of running out
-    of verbs -- saying it outright is the difference between a rule and an
-    accident.
+    The ``<Hangup>`` is load-bearing: an ``action`` URL makes Twilio keep the
+    *caller's* leg alive and hand control back, so after the host hangs up
+    that caller sits connected to silence until we end it.
     """
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -328,15 +305,11 @@ TERMINAL_CALL_STATUSES = frozenset({"completed", "busy", "failed", "no-answer", 
 async def call_status(request: Request, registry: RegistryDep) -> Response:
     """Terminal call events.
 
-    Point Twilio's status callback at this URL so the queue clears itself when
-    a caller hangs up while on hold -- otherwise their card sits there until
-    someone tries to act on a call that is already gone. It is configured per
-    number in the Twilio console; nothing here can set it.
+    Configured per number in the Twilio console ("Call status changes"), and
+    the only thing that clears the queue when a caller hangs up while holding.
 
-    Returns 204 deliberately. A status callback does not control call flow, so
-    Twilio wants either 204 or an empty ``<Response/>`` as text/xml -- anything
-    else (a JSON body, as this used to send) is logged as a warning in the
-    Twilio Debugger on every single call.
+    204 deliberately: a status callback does not control call flow, so Twilio
+    wants 204 or empty TwiML. A JSON body logs a Debugger warning per call.
     """
     params = await _form(request)
     call_id = params.get("CallSid")
