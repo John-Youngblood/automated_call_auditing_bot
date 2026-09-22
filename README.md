@@ -183,17 +183,16 @@ running it on Google Cloud.
 Six moments, each an **audio file with a spoken fallback**. Set the audio and
 it plays; otherwise Twilio speaks the text in `TTS_VOICE`.
 
-| Moment | Audio | Fallback |
-|---|---|---|
-| Greeting — *also the prompt* | `GREETING_AUDIO_URL` | `GREETING_MESSAGE` |
-| Hold music | `HOLD_MUSIC_URL` | *(Twilio's playlist)* |
-| Rejected | `REJECT_AUDIO_URL` | `REJECT_MESSAGE` |
-| Line closed | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE` |
-| Closing the line | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE` |
-| Accepted | *(dialled to `HOST_PHONE_NUMBER`)* | — |
+| Moment                                   | Audio | Fallback                      |
+|------------------------------------------|---|-------------------------------|
+| Greeting/Reason for calling              | `GREETING_AUDIO_URL` | `GREETING_MESSAGE`            |
+| Hold music                               | `HOLD_MUSIC_URL` | *(Twilio's classic playlist)* |
+| Rejected                                 | `REJECT_AUDIO_URL` | `REJECT_MESSAGE`              |
+| Line closed (show is not live)           | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE`         |
+| Line closing while enqueue (show ending) | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE`             |
+| Accepted                                 | *(dialled to `HOST_PHONE_NUMBER`)* | —                             |
 
-Audio settings take an absolute URL **or a bare filename** served from
-`backend/app/static/`. Use the filename in development — the tunnel hostname
+Audio settings take an absolute URL if file is hosted online **or** put the file in `backend/app/static/` and reference it with the bare filename (ex: `GREETING_AUDIO_URL=greeting.mp3`). Use the filename in development — the tunnel hostname
 rotates and `.env` can't interpolate it. Use a CDN in production.
 
 ---
@@ -222,11 +221,8 @@ say so rather than looking like a caller who stayed silent.
 
 ## Future Features
 
-| | |
-|---|---|
-| Per-user auth | One shared password, so there is no "who rejected that caller". No rate limiting on guesses either — the length floor is the only defence |
-| One on-air slot | Accepting a second caller while one is live dials a busy host. Nothing prevents it; the outcome is reported honestly |
-| Caller names | Needs Caller ID Lookup on the number (paid, off by default) |
-| Blocking / favourites | No way to bar a repeat troll or flag a good caller. Needs E.164 normalisation back (it was removed with the blocklist) and somewhere durable to keep the list — a blocklist that empties on deploy is not a blocklist |
+| Feature                 | Description                                                                                                                                                                                       |
+|-------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Block Callers           | black list of numbers Twilio should not forward.                                                                                                                                                  |
 | Persistent call history | History lives in memory, capped at `CALL_HISTORY_SIZE` and cleared on restart. A database would also carry the transcript through a restart, which is the one thing reconciliation cannot recover |
-| Single worker | Call state and dashboard fan-out are in-process — see `docs/architecture.md` |
+| Favorite Callers        | opposite of block callers. Mark numbers to have priority in the queue or be able to add a name to appear by it                                                                                    |
