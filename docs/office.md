@@ -56,7 +56,7 @@ PUBLIC_BASE_URL=https://calls.yourdomain.com     # the tunnel's hostname
 CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi…                # from step 3
 
 HOST_PHONE_NUMBER=+15035551234                   # the host's phone
-DASHBOARD_PASSWORD=                              # openssl rand -base64 24
+DASHBOARD_PASSWORD=                              # 8+ chars, shared with the room
 
 TWILIO_ACCOUNT_SID=AC…
 TWILIO_API_KEY_SID=SK…

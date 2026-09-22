@@ -1,0 +1,17 @@
+# What `gcloud run deploy --source=.` must not upload.
+#
+# Explicit rather than inherited: with no .gcloudignore, gcloud derives one
+# from .gitignore and writes it into the repo. Mirrors .dockerignore.
+.git
+.gitignore
+**/.venv
+**/node_modules
+**/dist
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.log
+.env
+.env.*
+!.env.example
+.tunnel-url

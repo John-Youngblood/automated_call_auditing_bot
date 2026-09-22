@@ -32,6 +32,11 @@ from app.telephony.rest import client_from_settings
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+#: The built dashboard, when it has been baked into the image. Present in the
+#: Cloud Run image (see the repo-root Dockerfile), absent everywhere else --
+#: dev serves it from Vite and the office stack from nginx.
+DASHBOARD_DIR = Path(__file__).parent / "dashboard"
+
 #: The shipped default for HOST_PHONE_NUMBER. Reaching production with this
 #: still set is a configuration failure, not a preference.
 PLACEHOLDER_HOST_NUMBER = "+15550000000"
@@ -170,6 +175,13 @@ def create_app() -> FastAPI:
     # from somewhere that is not your API.
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    # Last, because "/" matches every path: the routers above are registered
+    # first and so win. Serving the dashboard from the API means one origin,
+    # which is why the client's VITE_* overrides can stay unset -- see
+    # frontend/src/lib/api.ts. `html=True` serves index.html for "/".
+    if DASHBOARD_DIR.is_dir():
+        app.mount("/", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 
     return app
 
