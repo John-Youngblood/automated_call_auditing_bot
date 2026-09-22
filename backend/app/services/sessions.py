@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 #: Shortest password accepted outside local. A shared secret on a public URL
 #: is exactly as good as its length, and there is no rate limiting here.
-MIN_PASSWORD_LENGTH = 16
+MIN_PASSWORD_LENGTH = 8
 
 
 class Sessions:

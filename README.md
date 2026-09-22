@@ -220,7 +220,7 @@ say so rather than looking like a caller who stayed silent.
 
 ---
 
-## Not done yet
+## Future Features
 
 | | |
 |---|---|
