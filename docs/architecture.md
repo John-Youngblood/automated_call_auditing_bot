@@ -26,7 +26,7 @@ backend/app/
     twiml.py             the five XML documents
     rest.py              the four REST endpoints we call
     signature.py         webhook authenticity
-  static/                bundled audio, served at /static
+  static/                audio files the settings name, served at /static
 
 frontend/src/
   hooks/useCallStream.ts one socket, one reducer
@@ -76,15 +76,17 @@ rotates in development and `.env` cannot interpolate it, so a pasted absolute
 URL goes stale on every restart. A filename is rebuilt against the current base
 per request.
 
-Two deliberate asymmetries:
+A filename that is not on disk counts as unset, so the prompt falls back to
+its text rather than a `<Play>` of a 404, which Twilio skips and leaves the
+caller in silence. Startup logs a warning naming any such file. Absolute URLs
+are trusted as given: checking one would put a network request inside the
+call webhook.
 
-- The **greeting** falls back to the bundled `greeting.mp3` when it is on disk,
-  then to text. A call with no greeting is a caller sitting in silence, so it
-  always resolves to something.
-- **Hold music** has no bundled default. Blank omits `waitUrl` entirely and
-  Twilio plays its own playlist, which beats a `<Play>` pointing at a file that
-  may not exist. It is also the one prompt with no text fallback, because it is
-  music.
+There are no bundled defaults. A greeting that fell back to a file on disk
+used to mean clearing `GREETING_AUDIO_URL` kept playing the old recording.
+
+The one asymmetry is **hold music**: it is music, so it has no text to fall
+back on. Blank or missing omits `waitUrl`, and Twilio plays its own playlist.
 
 ## Dependency direction
 

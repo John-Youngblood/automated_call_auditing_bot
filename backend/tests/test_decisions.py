@@ -59,7 +59,10 @@ class TestReject:
         assert [child.tag for child in doc] == ["Say", "Hangup"]
         assert "not able to take you on air" in doc.find("Say").text
 
-    def test_a_recording_replaces_the_spoken_fallback(self, make_client, recorder) -> None:
+    def test_a_recording_replaces_the_spoken_fallback(
+        self, make_client, recorder, static_dir
+    ) -> None:
+        (static_dir / "sorry.mp3").touch()
         client = make_client(REJECT_AUDIO_URL="sorry.mp3")
         with client:
             hold(client)
@@ -68,6 +71,18 @@ class TestReject:
         doc = fromstring(sent_twiml(recorder, "CA-dec-1"))
         assert [child.tag for child in doc] == ["Play", "Hangup"]
         assert doc.find("Play").text == "https://calls.example.test/static/sorry.mp3"
+
+    def test_a_listed_recording_that_is_missing_is_spoken_instead(
+        self, make_client, recorder
+    ) -> None:
+        """Better the text than a <Play> of a 404, which Twilio skips."""
+        client = make_client(REJECT_AUDIO_URL="not-there.mp3")
+        with client:
+            hold(client)
+            client.post("/api/calls/CA-dec-1/reject")
+
+        doc = fromstring(sent_twiml(recorder, "CA-dec-1"))
+        assert [child.tag for child in doc] == ["Say", "Hangup"]
 
     def test_a_failure_leaves_the_call_on_the_dashboard(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch

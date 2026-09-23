@@ -14,6 +14,7 @@ api.twilio.com for real. `isolate_dotenv` cuts that link for every test.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -42,6 +43,19 @@ BASE_ENV = {
 def isolate_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
     """Build Settings from the environment only, never from a .env file."""
     monkeypatch.setitem(Settings.model_config, "env_file", None)
+
+
+@pytest.fixture(autouse=True)
+def static_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty app/static for every test; add files to it to make them exist.
+
+    Audio filenames only resolve when the file is on disk, so without this the
+    suite would pass or fail depending on which recordings are in the repo.
+    """
+    directory = tmp_path / "static"
+    directory.mkdir()
+    monkeypatch.setattr("app.config.STATIC_DIR", directory)
+    return directory
 
 
 @pytest.fixture

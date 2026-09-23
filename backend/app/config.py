@@ -16,8 +16,8 @@ from typing import Literal
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-#: Bundled audio, served at /static by main.py.
-_STATIC_DIR = Path(__file__).parent / "static"
+#: Where bare audio filenames live. main.py serves it at /static.
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 class Settings(BaseSettings):
@@ -135,36 +135,57 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
 
-    def _audio_url(self, configured: str, bundled: str = "") -> str:
-        """Absolute URL for something the caller will hear.
+    def _audio_url(self, configured: str) -> str:
+        """URL for something the caller will hear, or "" to speak the text.
 
-        Takes an absolute URL, or a bare filename served from app/static. The
-        filename form matters in development: PUBLIC_BASE_URL is a tunnel
-        hostname that rotates and .env cannot interpolate, so a pasted URL goes
-        stale on every restart. A filename is rebuilt against the current base.
+        Takes an absolute URL, or a bare filename in STATIC_DIR. The filename
+        form matters in development: PUBLIC_BASE_URL is a tunnel hostname that
+        rotates and .env cannot interpolate, so a pasted URL goes stale on every
+        restart. A filename is rebuilt against the current base.
+
+        A filename that is not on disk also gives "", so the prompt falls back
+        to its text -- a <Play> pointing at a 404 is skipped by Twilio and
+        leaves the caller in silence. Absolute URLs are trusted as given:
+        checking one would mean a network request inside the call webhook.
         """
-        target = configured.strip() or bundled
+        target = configured.strip().lstrip("/")
         if not target:
             return ""
         if "://" in target:
             return target
-        return f"{self.public_base_url.rstrip('/')}/static/{target.lstrip('/')}"
+        if not (STATIC_DIR / target).is_file():
+            return ""
+        return f"{self.public_base_url.rstrip('/')}/static/{target}"
+
+    def missing_audio_files(self) -> list[str]:
+        """Audio settings naming a file that is not in STATIC_DIR, as KEY=value.
+
+        Those prompts are spoken instead. main.py reports them at startup, so a
+        typo is caught at deploy time rather than heard on air.
+        """
+        audio = {
+            "GREETING_AUDIO_URL": self.greeting_audio_url,
+            "HOLD_MUSIC_URL": self.hold_music_url,
+            "REJECT_AUDIO_URL": self.reject_audio_url,
+            "CLOSED_LINE_AUDIO_URL": self.closed_line_audio_url,
+            "CLOSING_AUDIO_URL": self.closing_audio_url,
+        }
+        return [f"{k}={v}" for k, v in audio.items() if v.strip() and not self._audio_url(v)]
 
     @property
     def resolved_greeting_url(self) -> str:
-        """Configured greeting, else the bundled recording if it is on disk.
+        """Blank means speak ``greeting_message``, like every other prompt.
 
-        Returning "" falls through to speaking ``greeting_message``, which is a
-        better failure than <Play> pointing at a 404.
+        There used to be a fallback to static/greeting.mp3 when that file was
+        on disk. It made blank mean two different things depending on what
+        happened to be in the image, so clearing the setting did not stop the
+        recording playing.
         """
-        if not self.greeting_audio_url and (_STATIC_DIR / "greeting.mp3").is_file():
-            return self._audio_url("", "greeting.mp3")
         return self._audio_url(self.greeting_audio_url)
 
     @property
     def resolved_hold_music_url(self) -> str:
-        """No bundled default, unlike the greeting: blank gets Twilio's own
-        playlist, which beats a <Play> pointing at a file that may not exist."""
+        """Blank gets Twilio's own playlist -- music has no text to fall back on."""
         return self._audio_url(self.hold_music_url)
 
     @property

@@ -6,6 +6,7 @@ from xml.etree.ElementTree import fromstring
 
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.telephony.signature import compute_twilio_signature
 
 TWILIO_FORM = {
@@ -43,9 +44,9 @@ def test_greeting_is_the_prompt_and_twilio_listens_after_it(client: TestClient) 
     assert gather.attrib["actionOnEmptyResult"] == "true"
     assert gather.attrib["action"] == "https://calls.example.test/webhook/speech-result"
 
-    # <Play> nested inside <Gather>: the greeting doubles as the prompt and a
-    # caller who talks over it is still heard.
-    assert gather.findtext("Play") == "https://calls.example.test/static/greeting.mp3"
+    # Nested inside <Gather>: the greeting doubles as the prompt and a caller
+    # who talks over it is still heard. Spoken here, since no audio is set.
+    assert gather.find("Say") is not None
 
     # Fallback so a fallen-through <Gather> does not run off the end of the
     # document and hang up on the caller.
@@ -330,9 +331,10 @@ class TestHoldMusic:
         assert enqueue is not None
         assert enqueue.attrib["waitUrl"] == "https://cdn.example.test/hold.mp3"
 
-    def test_a_bare_filename_is_served_from_this_backend(self, make_client) -> None:
+    def test_a_bare_filename_is_served_from_this_backend(self, make_client, static_dir) -> None:
         """The form that survives a rotating tunnel: .env cannot interpolate
         PUBLIC_BASE_URL, so a filename is rebuilt against the current base."""
+        (static_dir / "h3_podcast_theme.mp3").touch()
         client = make_client(HOLD_MUSIC_URL="h3_podcast_theme.mp3")
         with client:
             enqueue = self.hold_twiml(client)
@@ -343,13 +345,23 @@ class TestHoldMusic:
             == "https://calls.example.test/static/h3_podcast_theme.mp3"
         )
 
-    def test_a_leading_slash_does_not_double_up(self, make_client) -> None:
+    def test_a_leading_slash_does_not_double_up(self, make_client, static_dir) -> None:
+        (static_dir / "theme.mp3").touch()
         client = make_client(HOLD_MUSIC_URL="/theme.mp3")
         with client:
             enqueue = self.hold_twiml(client)
 
         assert enqueue is not None
         assert enqueue.attrib["waitUrl"] == "https://calls.example.test/static/theme.mp3"
+
+    def test_a_listed_file_that_is_missing_gets_twilios_music(self, make_client) -> None:
+        """No waitUrl at all, rather than one Twilio fails to fetch on every loop."""
+        client = make_client(HOLD_MUSIC_URL="not-there.mp3")
+        with client:
+            enqueue = self.hold_twiml(client)
+
+        assert enqueue is not None
+        assert "waitUrl" not in enqueue.attrib
 
     def test_wait_url_is_fetched_with_get(self, make_client) -> None:
         """Twilio only caches a static audio file when it GETs it. Left as the
@@ -366,22 +378,61 @@ class TestHoldMusic:
 
 
 class TestGreetingResolution:
-    """The greeting resolves the same way, with one difference: it always
-    produces a URL, because a call with no greeting is a caller in silence."""
+    """The greeting resolves like every other prompt: audio if set, else text."""
 
     def greeting_url(self, client: TestClient) -> str:
         response = client.post("/webhook/incoming-call", data=TWILIO_FORM)
         return fromstring(response.text).find("Gather/Play").text
 
-    def test_unset_falls_back_to_the_bundled_recording(self, client: TestClient) -> None:
-        assert self.greeting_url(client) == "https://calls.example.test/static/greeting.mp3"
+    def test_unset_speaks_the_message_even_with_a_recording_on_disk(
+        self, make_client, static_dir
+    ) -> None:
+        """static/greeting.mp3 exists, and blank must still mean speak.
+
+        It used to fall back to that file, so clearing GREETING_AUDIO_URL in
+        production kept playing the old recording -- the setting said one
+        thing and the caller heard another.
+        """
+        (static_dir / "greeting.mp3").touch()
+        client = make_client(GREETING_MESSAGE="Tell us why you are calling.")
+        with client:
+            response = client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        gather = fromstring(response.text).find("Gather")
+
+        assert gather.find("Play") is None
+        assert gather.findtext("Say") == "Tell us why you are calling."
+        assert gather.find("Say").attrib["voice"] == "Polly.Joanna"
 
     def test_an_absolute_url_is_used_as_given(self, make_client) -> None:
         client = make_client(GREETING_AUDIO_URL="https://cdn.example.test/hi.mp3")
         with client:
             assert self.greeting_url(client) == "https://cdn.example.test/hi.mp3"
 
-    def test_a_bare_filename_is_served_from_this_backend(self, make_client) -> None:
+    def test_a_bare_filename_is_served_from_this_backend(self, make_client, static_dir) -> None:
+        (static_dir / "intro.mp3").touch()
         client = make_client(GREETING_AUDIO_URL="intro.mp3")
         with client:
             assert self.greeting_url(client) == "https://calls.example.test/static/intro.mp3"
+
+    def test_a_listed_file_that_is_missing_is_spoken_instead(self, make_client) -> None:
+        """A typo in the filename must not leave the caller in silence."""
+        client = make_client(
+            GREETING_AUDIO_URL="gretting.mp3", GREETING_MESSAGE="Tell us why you are calling."
+        )
+        with client:
+            response = client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        gather = fromstring(response.text).find("Gather")
+
+        assert gather.find("Play") is None
+        assert gather.findtext("Say") == "Tell us why you are calling."
+
+    def test_missing_files_are_reported(self, configure_env, static_dir) -> None:
+        """What main.py warns about at startup. Absolute URLs are never listed:
+        they are trusted, not fetched."""
+        (static_dir / "here.mp3").touch()
+        configure_env(
+            GREETING_AUDIO_URL="gretting.mp3",
+            HOLD_MUSIC_URL="here.mp3",
+            REJECT_AUDIO_URL="https://cdn.example.test/sorry.mp3",
+        )
+        assert get_settings().missing_audio_files() == ["GREETING_AUDIO_URL=gretting.mp3"]

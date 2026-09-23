@@ -22,15 +22,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import calls, frontend, health, session, webhooks
-from app.config import Settings, get_settings
+from app.config import STATIC_DIR, Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.line_state import LineState
 from app.services.reconcile import reconcile_hold_queue
 from app.services.sessions import MIN_PASSWORD_LENGTH, Sessions
 from app.telephony.rest import client_from_settings
-
-STATIC_DIR = Path(__file__).parent / "static"
 
 #: The built dashboard, when it has been baked into the image. Present in the
 #: Cloud Run image (see the repo-root Dockerfile), absent everywhere else --
@@ -83,6 +81,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning(
             "no Twilio REST credentials -- accept, reject and closing the line "
             "will fail until TWILIO_ACCOUNT_SID and an API key are set"
+        )
+    # A listed audio file that is not on disk is spoken instead. Said now, so a
+    # typo is caught at deploy time rather than heard on air.
+    if missing := settings.missing_audio_files():
+        log.warning(
+            "audio file not in app/static, falling back to the spoken text "
+            "(or Twilio's own hold music): %s",
+            ", ".join(missing),
         )
     if settings.app_env != "local" and not settings.validate_webhook_signature:
         log.warning(
@@ -173,9 +179,8 @@ def create_app() -> FastAPI:
     app.include_router(calls.router)
     app.include_router(frontend.router)
 
-    # Serves the greeting MP3 when GREETING_AUDIO_URL is unset. Fine for local
-    # work; in production put the audio on a CDN so the provider fetches it
-    # from somewhere that is not your API.
+    # Serves the audio files the *_AUDIO_URL settings name by bare filename.
+    # Fine at this scale; a CDN URL in those settings bypasses it entirely.
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
