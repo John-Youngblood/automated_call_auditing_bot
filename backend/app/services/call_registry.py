@@ -60,9 +60,6 @@ class CallRegistry:
         )
         return finished[:limit] if limit else finished
 
-    def snapshot_event(self, line_open: bool = True) -> ServerEvent:
-        return ServerEvent.snapshot(self.open_calls(), line_open=line_open)
-
     # -- writes -------------------------------------------------------------
     def register_incoming(
         self,

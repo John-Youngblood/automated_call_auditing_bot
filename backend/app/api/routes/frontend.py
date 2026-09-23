@@ -67,7 +67,13 @@ async def frontend_stream(
     async with broadcaster.subscribe(kind="dashboard") as subscriber:
         # Replay current state first. Without this, a dashboard opened
         # mid-call shows an empty queue until the next event happens to fire.
-        await websocket.send_json(registry.snapshot_event(line.is_open).to_wire())
+        await websocket.send_json(
+            ServerEvent.snapshot(
+                registry.open_calls(),
+                line_open=line.is_open,
+                screening_number=settings.twilio_phone_number,
+            ).to_wire()
+        )
 
         reader = asyncio.create_task(
             _read_commands(websocket, registry, settings), name="dash-reader"

@@ -31,6 +31,8 @@ interface State {
   endedCount: number;
   /** Whether the show is taking new calls. */
   lineOpen: boolean;
+  /** The number listeners dial. Config, so it only ever arrives in a snapshot. */
+  screeningNumber: string | null;
 }
 
 const initialState: State = {
@@ -43,6 +45,7 @@ const initialState: State = {
   // immediately on connect. The alternative -- assuming closed -- would flash
   // "off air" on every page load during a live show.
   lineOpen: true,
+  screeningNumber: null,
 };
 
 type Action =
@@ -92,6 +95,7 @@ function reducer(state: State, action: Action): State {
             calls,
             order: event.data.calls.map((call) => call.callId),
             lineOpen: event.data.lineOpen,
+            screeningNumber: event.data.screeningNumber,
           };
         }
 
@@ -135,6 +139,8 @@ export interface UseCallStream {
   lastError: string | null;
   /** Whether the show is taking new calls. */
   lineOpen: boolean;
+  /** The number listeners dial, or null when it is not configured. */
+  screeningNumber: string | null;
   /** Calls awaiting a decision or being screened, oldest first. */
   activeCalls: Call[];
   /** Recently finished calls, newest first. */
@@ -232,6 +238,7 @@ export function useCallStream(): UseCallStream {
     endedCount: state.endedCount,
     lastError: state.lastError,
     lineOpen: state.lineOpen,
+    screeningNumber: state.screeningNumber,
     activeCalls,
     recentCalls,
     selectedCall,

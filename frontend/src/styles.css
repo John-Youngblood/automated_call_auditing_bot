@@ -141,6 +141,93 @@ h2 {
   color: #fff;
 }
 
+/* The number listeners dial, beside the wordmark.
+   A dark scrim, not the tabs' translucent white: over this gradient a 16%
+   white overlay *lowers* contrast (~3.9:1 by the right edge of the brand
+   block), where 45% black holds comfortably above 4.5:1 along the whole ramp.
+   Same treatment as the footer's line-state pill, so they read as a set. */
+.callin {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 12px;
+  color: #fff;
+  background: rgb(0 0 0 / 45%);
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: 999px;
+  /* Never the thing that gets squeezed: the title truncates first. */
+  flex: 0 0 auto;
+}
+
+.callin__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.callin__number {
+  font-size: 14px;
+  font-weight: 700;
+  /* Tabular figures so the digits do not shimmy when the header reflows. */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  /* One click selects the whole number: the likeliest use after reading it
+     aloud is pasting it into a script or a chat message. */
+  user-select: all;
+}
+
+/* Once the brand no longer shares its row with the tabs, the pill belongs at
+   the far end of that row rather than hugging the wordmark.
+
+   `width: 100%` is what *makes* the brand own the row, rather than relying on
+   flex-wrap to do it at some width that depends on how wide the number
+   happens to render. So the breakpoint is a decision -- "below this the brand
+   gets its own line" -- instead of a measurement that a different phone
+   number would invalidate. Measured wrap point today is 644px. */
+@media (width <= 640px) {
+  .app__brand {
+    width: 100%;
+  }
+
+  .callin {
+    margin-inline-start: auto;
+  }
+}
+
+/* Phone layout for the header.
+
+   Explicitly three stacked rows rather than whatever flex-wrap happens to
+   produce, so each one is placed on purpose: the brand left, the view tabs
+   centred where a thumb reaches them, and the connection badge and sign-out
+   to the right, out of the way of both.
+
+   The brand row also cannot fit the logo, the wordmark and the whole pill, so
+   something has to give and it must not be the number -- the label goes. A
+   phone number in a pill beside the title does not need telling. */
+@media (width <= 520px) {
+  .app__header {
+    flex-direction: column;
+    /* Not `stretch`: the children must size to their content for `align-self`
+       to place them, or each would fill the row and land on the left. */
+    align-items: flex-start;
+  }
+
+  .tabs {
+    align-self: center;
+  }
+
+  .app__header-right {
+    align-self: flex-end;
+  }
+
+  .callin__label {
+    display: none;
+  }
+}
+
 /* Line controls live down here rather than in the header: going off air is a
    once-a-show decision, and it should not sit beside the tabs an operator
    uses constantly. Left-aligned, toggle first -- the button is the thing you
@@ -970,6 +1057,9 @@ h2 {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* Keeps these to the right once the header wraps them onto their own line.
+     Redundant on a wide header, where justify-content already does it. */
+  margin-inline-start: auto;
 }
 
 .app__signout {

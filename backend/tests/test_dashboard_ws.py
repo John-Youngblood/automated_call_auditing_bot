@@ -251,3 +251,27 @@ async def test_abrupt_disconnect_does_not_escape_the_handler(configure_env) -> N
 
     # The close was attempted and its failure swallowed -- not skipped.
     assert sent == ["websocket.accept", "websocket.send", "websocket.close"]
+
+
+class TestScreeningNumber:
+    """The number listeners dial, carried so the footer can show it.
+
+    Config rather than state, but it rides in the snapshot because that is the
+    one message every dashboard is guaranteed to get, on connect and on every
+    reconnect.
+    """
+
+    def test_the_snapshot_carries_it(self, make_client) -> None:
+        client = make_client(TWILIO_PHONE_NUMBER="+18185550123")
+        with client, client.websocket_connect("/ws/frontend") as ws:
+            snapshot = ws.receive_json()
+
+        assert snapshot["data"]["screeningNumber"] == "+18185550123"
+
+    def test_it_is_null_when_unset(self, client: TestClient) -> None:
+        """Null, not "": the dashboard hides the footer entry entirely rather
+        than rendering an empty one an operator might read out on air."""
+        with client.websocket_connect("/ws/frontend") as ws:
+            snapshot = ws.receive_json()
+
+        assert snapshot["data"]["screeningNumber"] is None

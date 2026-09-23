@@ -45,6 +45,7 @@ export default function Dashboard({ onSignedOut }: Props) {
     dismissError,
     endedCount,
     lineOpen,
+    screeningNumber,
   } = useCallStream();
 
   const now = useNow();
@@ -62,6 +63,17 @@ export default function Dashboard({ onSignedOut }: Props) {
               itself is identified in the UI, so alt="" would drop that. */}
           <img className="app__logo" src="/h3_logo.png" alt="The H3 Podcast" />
           <h1>Call Screener</h1>
+
+          {/* Beside the wordmark because it is the one thing an operator reads
+              off the screen to someone else, mid-show. Hidden entirely when
+              TWILIO_PHONE_NUMBER is unset, rather than rendering an empty
+              label somebody might read out by mistake. */}
+          {screeningNumber && (
+            <p className="callin">
+              <span className="callin__label">Call in</span>
+              <span className="callin__number">{formatPhoneNumber(screeningNumber)}</span>
+            </p>
+          )}
         </div>
 
         <nav className="tabs" aria-label="Views">

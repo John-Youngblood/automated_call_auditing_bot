@@ -51,7 +51,9 @@ class ServerEvent(CamelModel):
     # -- constructors: the only sanctioned way to build an event, so the
     #    payload shape for each type lives in exactly one place ------------
     @classmethod
-    def snapshot(cls, calls: list[Call], line_open: bool = True) -> ServerEvent:
+    def snapshot(
+        cls, calls: list[Call], line_open: bool = True, screening_number: str = ""
+    ) -> ServerEvent:
         return cls(
             type=ServerEventType.SNAPSHOT,
             data={
@@ -59,6 +61,10 @@ class ServerEvent(CamelModel):
                 # Carried in the snapshot as well as its own event: a dashboard
                 # opened while the line is closed must not show "on air".
                 "lineOpen": line_open,
+                # Static config rather than live state, but it rides along here
+                # because the snapshot is the one message every dashboard is
+                # guaranteed to get, on connect and on every reconnect.
+                "screeningNumber": screening_number or None,
             },
         )
 

@@ -78,7 +78,8 @@ interface BaseServerEvent {
 export type ServerEvent =
   | (BaseServerEvent & {
       type: 'state.snapshot';
-      data: { calls: Call[]; lineOpen: boolean };
+      /** `screeningNumber` is config, not state — null when TWILIO_PHONE_NUMBER is unset. */
+      data: { calls: Call[]; lineOpen: boolean; screeningNumber: string | null };
     })
   | (BaseServerEvent & { type: 'call.incoming'; data: { call: Call } })
   | (BaseServerEvent & { type: 'call.updated'; data: { call: Call } })
