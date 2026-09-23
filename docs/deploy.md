@@ -49,21 +49,31 @@ the dashboard.
 Credentials do **not** belong in `--set-env-vars`: those are readable by anyone
 with `run.services.get` and land in your shell history.
 
+If your local `.env` is already filled in, push the same values up rather than
+retyping them. Creates each secret and adds a version, straight from the file:
+
+```bash
+bash -c 'cd "$(git rev-parse --show-toplevel)"; set -a; . ./.env; set +a; for s in dashboard-password:DASHBOARD_PASSWORD twilio-auth-token:TWILIO_AUTH_TOKEN twilio-account-sid:TWILIO_ACCOUNT_SID twilio-api-key-sid:TWILIO_API_KEY_SID twilio-api-key-secret:TWILIO_API_KEY_SECRET; do n=${s%%:*}; v=${s#*:}; gcloud secrets create "$n" --replication-policy=automatic 2>/dev/null; printf "%s" "${!v}" | gcloud secrets versions add "$n" --data-file=-; done'
+```
+
+`bash -c` on purpose — `${!v}` is bash indirect expansion and does not work in
+zsh, which is the default shell on macOS.
+
+Starting from nothing instead, create them and feed each value from a prompt
+rather than an argument, so it stays out of your shell history:
+
 ```bash
 for s in dashboard-password twilio-auth-token twilio-account-sid twilio-api-key-sid twilio-api-key-secret; do
   gcloud secrets create "$s" --replication-policy=automatic
 done
 ```
 
-Then put each value in, reading from a prompt rather than an argument:
-
 ```bash
 read -rs SECRET && printf '%s' "$SECRET" | gcloud secrets versions add twilio-auth-token --data-file=-
 ```
 
-Repeat for the others. The service only insists on 8 characters, but this
-deployment puts the dashboard on a public URL with no rate limiting, and nobody
-has to memorise a secret they paste in once — so generate it:
+The dashboard password only has to clear 8 characters. If you would rather not
+reuse the local one on a public URL, generate a version instead:
 
 ```bash
 openssl rand -base64 24 | tr -d '\n' | gcloud secrets versions add dashboard-password --data-file=-
@@ -147,6 +157,50 @@ and put it back to `0` afterwards. Check the current rate on the
 [pricing calculator](https://cloud.google.com/products/calculator) — it is the
 only meaningful line on the bill.
 
+### If the first deploy fails on permissions
+
+```
+PERMISSION_DENIED: Build failed because the default service account is missing
+required IAM permissions. ... could not resolve source
+```
+
+Expected on a new project. Cloud Build runs as the Compute Engine default
+service account, and projects created since 2024 no longer grant that account
+Editor automatically — so it cannot read the source archive `--source` just
+uploaded, nor push the image it builds. Grant it the build role once:
+
+```bash
+PROJECT=$(gcloud config get-value project); NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)'); gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:${NUMBER}-compute@developer.gserviceaccount.com" --role="roles/run.builder"
+```
+
+Allow a minute for it to propagate, then re-run the deploy unchanged.
+
+If you would rather not hand Cloud Build those permissions at all, build the
+image yourself and deploy that instead — the root `Dockerfile` needs nothing
+but Docker:
+
+```bash
+gcloud artifacts repositories create call-screener --repository-format=docker --location=us-west1
+```
+
+```bash
+gcloud auth configure-docker us-west1-docker.pkg.dev
+```
+
+```bash
+docker build --platform linux/amd64 -t us-west1-docker.pkg.dev/$(gcloud config get-value project)/call-screener/app:v1 .
+```
+
+`--platform linux/amd64` is not optional on an Apple Silicon Mac: the local
+build is arm64, and Cloud Run will refuse it.
+
+```bash
+docker push us-west1-docker.pkg.dev/$(gcloud config get-value project)/call-screener/app:v1
+```
+
+Then deploy with `--image=` in place of `--source=`, keeping every other flag
+from above.
+
 ### Then fill in the URL
 
 Take the URL the deploy printed and redeploy with it:
@@ -162,6 +216,26 @@ that setting rather than trusting forwarded headers.
 
 Open the `.run.app` URL and sign in with the dashboard password. If the header
 says **Connected**, the websocket is through and you are done.
+
+---
+
+### Two hostnames, only one of which Twilio may use
+
+Cloud Run answers on both `SERVICE-PROJECTNUMBER.REGION.run.app` and a legacy
+`SERVICE-HASH-REGION.a.run.app`. They reach the same service, but signature
+validation rebuilds the signed URL from `PUBLIC_BASE_URL` rather than trusting
+forwarded headers — so Twilio must be pointed at whichever one you set there.
+Use the other and every webhook fails validation, callers hear the fallback,
+and the logs show only rejections.
+
+### `/healthz` does not work through the public URL
+
+Google's frontend intercepts `/healthz` on `*.run.app` and returns its own 404;
+the request never reaches the container. Other unmatched paths pass through
+normally. Nothing operational depends on this — Cloud Run probes the container
+port directly, and the compose healthcheck calls `127.0.0.1:8000/healthz` from
+inside the container — but do not point external uptime monitoring at it, or it
+will report a healthy service as down.
 
 ---
 
