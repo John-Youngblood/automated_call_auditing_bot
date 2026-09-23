@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     #: default is a placeholder main.py refuses to start on outside local.
     host_phone_number: str = "+15550000000"
 
-    #: The number listeners dial, shown in the dashboard footer so an operator
+    #: The number listeners dial, shown in the dashboard header so an operator
     #: can read it out on air. Display only -- nothing routes on it, and Twilio
     #: reports the dialled number per call as ``to_number``. Blank hides it.
     twilio_phone_number: str = ""
