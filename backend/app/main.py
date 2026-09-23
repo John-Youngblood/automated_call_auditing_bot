@@ -146,9 +146,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
 
+    # No `version=`: the dashboard footer is the one place a version is stated,
+    # and it comes from frontend/package.json at build time. A second copy here
+    # would only ever be the one somebody forgot to bump. FastAPI falls back to
+    # its own default for the OpenAPI spec, which nothing depends on.
     app = FastAPI(
         title="Call Screener API",
-        version="0.1.0",
         summary="Telephony webhooks, streaming transcription, and dashboard fan-out",
         lifespan=lifespan,
     )

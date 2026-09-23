@@ -203,6 +203,12 @@ export default function Dashboard({ onSignedOut }: Props) {
           it does not belong next to the tabs they use constantly. */}
       <footer className="app__footer">
         <LineControls open={lineOpen} onNotice={push} />
+
+        {/* Baked in at build time from package.json, so it identifies the
+            bundle this browser is actually running -- not what the server
+            most recently deployed. That difference is the whole point when
+            someone reports a bug from a tab they left open yesterday. */}
+        <span className="app__version">v{import.meta.env.VITE_APP_VERSION}</span>
       </footer>
 
       <Toasts toasts={toasts} onDismiss={dismiss} />

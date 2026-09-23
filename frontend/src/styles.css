@@ -261,6 +261,20 @@ h2 {
   background: rgb(0 0 0 / 58%);
 }
 
+/* Far right of the footer, which is the *dark* end of the reversed gradient
+   (#9b2fb8, ~6:1 against white), so this needs no scrim the way the controls
+   over the pale end do. 85% white lands near 4.7:1 and reads as secondary
+   without dropping below AA. */
+.app__version {
+  margin-inline-start: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: rgb(255 255 255 / 85%);
+  /* Quoting it back in a bug report is the entire use. */
+  user-select: all;
+}
+
 /* Two panes on desktop; the queue collapses above the detail on narrow
    screens so the dashboard stays usable on a tablet at a desk. */
 /* The queue is the work surface and gets the room; the detail pane is a

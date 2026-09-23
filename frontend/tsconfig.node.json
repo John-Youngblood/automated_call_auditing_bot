@@ -10,7 +10,9 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    // vite.config.ts imports package.json for the version it bakes in.
+    "resolveJsonModule": true
   },
   "include": ["vite.config.ts"]
 }

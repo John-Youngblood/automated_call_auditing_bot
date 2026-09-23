@@ -1,6 +1,8 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
+import pkg from './package.json';
+
 // In compose this points at the backend service; locally it falls back to the
 // host port. Everything is proxied so the browser only ever sees one origin:
 // no CORS, no mixed cookie domains, and the websocket URL can be derived from
@@ -27,6 +29,13 @@ export default defineConfig({
       // ws:true is what makes the proxy issue an Upgrade instead of a 404.
       '/ws': { target: backendOrigin, ws: true, changeOrigin: true },
     },
+  },
+  // The dashboard footer shows this, so you can tell at a glance which build a
+  // browser is actually running. package.json is the one place to bump it --
+  // read at config time and substituted into the bundle, so there is no second
+  // copy to drift.
+  define: {
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version),
   },
   build: { outDir: 'dist', sourcemap: true },
 });
