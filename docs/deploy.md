@@ -254,6 +254,34 @@ is a one-time step.
 
 ---
 
+## Changing settings
+
+After editing `.env`, push the changes with:
+
+```bash
+make push-env
+```
+
+It shows exactly what will change and asks before touching anything. It sends
+two kinds of setting:
+
+* **Shared settings** (messages, audio, phone numbers, speech tuning) as plain
+  env vars. Settings tied to where the app runs are never sent: your local
+  `PUBLIC_BASE_URL` points at a tunnel and would break every call.
+* **Secrets** the service already uses (dashboard password, Twilio
+  credentials), when your `.env` value differs. Values are never printed.
+
+A changed secret is added as a new version, and the service is pinned to that
+exact version rather than `:latest`. That's deliberate: a running instance reads
+secrets once, at startup, so only a real config change forces the restart that
+loads the new value. It does mean a secret edited by hand in the console won't
+be picked up until you run `make push-env` or redeploy.
+
+Don't use `gcloud run services update --env-vars-file` for this. It deletes
+every env var not in the file, including `APP_ENV` and `PUBLIC_BASE_URL`.
+
+---
+
 ## Redeploying
 
 ```bash

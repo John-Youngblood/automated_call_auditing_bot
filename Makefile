@@ -1,6 +1,6 @@
 # Convenience wrappers. Everything here is a one-liner you can also run by hand.
 .DEFAULT_GOAL := help
-.PHONY: help up down logs build install test lint fmt check simulate office office-down office-logs tunnel url clean
+.PHONY: help up down logs build install test lint fmt check simulate office office-down office-logs tunnel url push-env clean
 
 BACKEND := backend
 FRONTEND := frontend
@@ -62,6 +62,9 @@ office-logs: ## Tail the office stack
 
 tunnel: ## Open a throwaway public tunnel (dev; rotates on every restart)
 	./scripts/tunnel.sh
+
+push-env: ## Copy shared settings from .env to Cloud Run (shows changes, asks first)
+	python3 scripts/push_env.py --service $(or $(SERVICE),call-screener) --region $(or $(REGION),us-west1)
 
 url: ## Print the current public tunnel URL
 	@cat .tunnel-url 2>/dev/null || echo "No tunnel running. Start one with: make tunnel"
