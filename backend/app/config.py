@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     #: Created on demand by <Enqueue>; nothing to set up in the console.
     hold_queue_name: str = "screening"
 
+    #: Longest a caller may hold before hearing the reject message and being
+    #: hung up. 0 disables it, leaving only Twilio's own 4-hour cap on any call.
+    #: Checked each time a hold track finishes, so it can run one track over.
+    max_hold_minutes: int = Field(default=60, ge=0)
+
     #: Open on start, so a deploy cannot silently take the show off air.
     line_open_on_start: bool = True
 

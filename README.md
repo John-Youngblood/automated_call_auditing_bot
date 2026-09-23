@@ -187,7 +187,7 @@ it plays; otherwise Twilio speaks the text in `TTS_VOICE`.
 |------------------------------------------|---|-------------------------------|
 | Greeting/Reason for calling              | `GREETING_AUDIO_URL` | `GREETING_MESSAGE`            |
 | Hold music                               | `HOLD_MUSIC_URL` | *(Twilio's classic playlist)* |
-| Rejected                                 | `REJECT_AUDIO_URL` | `REJECT_MESSAGE`              |
+| Rejected, or held past `MAX_HOLD_MINUTES` | `REJECT_AUDIO_URL` | `REJECT_MESSAGE`              |
 | Line closed (show is not live)           | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE`         |
 | Line closing while enqueue (show ending) | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE`             |
 | Accepted                                 | *(dialled to `HOST_PHONE_NUMBER`)* | —                             |

@@ -2,6 +2,7 @@
 
     POST /webhook/incoming-call     a call arrives
     POST /webhook/speech-result     the caller finished describing their reason
+    POST /webhook/hold-wait         what a holding caller hears next
     POST /webhook/queue-exit        the caller left the hold queue
     POST /webhook/dial-complete     an accepted caller's time with the host ended
     POST /webhook/call-status       the call ended
@@ -15,7 +16,8 @@ The flow:
          /webhook/speech-result ──▶ transcript to the dashboard
               │
               ▼
-         <Enqueue> caller holds while an operator reads it and decides
+         <Enqueue> caller holds while an operator reads it and decides,
+                   and /webhook/hold-wait ends the hold past MAX_HOLD_MINUTES
 
 Twilio owns the hard part -- deciding when the caller stopped speaking -- so
 there is no audio streaming anywhere in this service.
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import random
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -36,7 +39,16 @@ from app.api.deps import LineDep, RegistryDep, SettingsDep
 from app.schemas.calls import Caller
 from app.services.decisions import DIAL_COMPLETE_PATH
 from app.services.phone import format_location
-from app.telephony import RenderedResponse, answer_and_gather, hang_up, hold, speak_and_hangup
+from app.telephony import (
+    TWILIO_HOLD_MUSIC,
+    RenderedResponse,
+    answer_and_gather,
+    hang_up,
+    hold,
+    hold_music,
+    leave_queue,
+    speak_and_hangup,
+)
 from app.telephony.signature import verify_twilio_signature
 
 logger = logging.getLogger(__name__)
@@ -44,12 +56,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["telephony"])
 
 SPEECH_RESULT_PATH = "/webhook/speech-result"
+HOLD_WAIT_PATH = "/webhook/hold-wait"
 QUEUE_EXIT_PATH = "/webhook/queue-exit"
 
 #: QueueResult values meaning the caller is gone rather than connected.
 #: "bridged" and "redirected" mean they reached a human, so whatever decision
-#: was already recorded stands.
-ABANDONED_QUEUE_RESULTS = frozenset({"hangup", "leave", "error", "system-error", "queue-full"})
+#: was already recorded stands. "leave" is handled on its own: only our
+#: hold-wait issues <Leave>, and the caller is still there to be told why.
+ABANDONED_QUEUE_RESULTS = frozenset({"hangup", "error", "system-error", "queue-full"})
 
 #: "Nothing further" -- ends the call. Used wherever an action URL has been
 #: handed control of a leg we have no more plans for.
@@ -188,15 +202,47 @@ async def speech_result(
 
     registry.set_transcript(call_id, text, confidence)
 
-    # Hold them. The call stays open until an operator accepts, rejects, or
-    # the caller hangs up.
+    # Hold them. The call stays open until an operator accepts or rejects,
+    # the caller hangs up, or they reach MAX_HOLD_MINUTES.
+    base = settings.public_base_url.rstrip("/")
     return _twiml(
         hold(
             settings.hold_queue_name,
-            f"{settings.public_base_url.rstrip('/')}{QUEUE_EXIT_PATH}",
-            wait_url=settings.resolved_hold_music_url,
+            f"{base}{QUEUE_EXIT_PATH}",
+            wait_url=f"{base}{HOLD_WAIT_PATH}",
         )
     )
+
+
+@router.post(
+    HOLD_WAIT_PATH,
+    summary="What a holding caller hears next",
+    response_class=Response,
+)
+async def hold_wait(request: Request, settings: SettingsDep) -> Response:
+    """Twilio requests this each time the previous track ends, for as long as
+    the caller holds, with ``QueueTime`` in seconds.
+
+    That makes it the one place to time out a hold without a timer of our
+    own. A timer would stop whenever this process did -- and a Cloud Run
+    instance scaled to zero, with the line left open and nobody watching, is
+    exactly when a queue runs long. Twilio keeps asking regardless.
+    """
+    params = await _form(request)
+    _check_signature(request, params, settings)
+
+    waited = 0
+    with contextlib.suppress(ValueError):
+        waited = int(params.get("QueueTime") or 0)
+
+    limit = settings.max_hold_minutes * 60
+    if limit and waited >= limit:
+        logger.info("max hold reached call_id=%s after=%ss", params.get("CallSid"), waited)
+        return _twiml(leave_queue())
+
+    # A different one of Twilio's tracks each loop, as its own playlist would.
+    music = settings.resolved_hold_music_url or random.choice(TWILIO_HOLD_MUSIC)
+    return _twiml(hold_music(music))
 
 
 @router.post(
@@ -222,6 +268,21 @@ async def queue_exit(
     call_id = params.get("CallSid")
     result = params.get("QueueResult", "unknown")
     waited = params.get("QueueTime")
+
+    if result == "leave":
+        # Only hold_wait issues <Leave>, and only past MAX_HOLD_MINUTES. Twilio
+        # has already taken them out of the queue; they are still on the line.
+        # Same words as a rejection: either way, they are not getting on air.
+        logger.info("hold timed out call_id=%s after=%ss", call_id, waited)
+        if call_id:
+            registry.end(call_id)
+        return _twiml(
+            speak_and_hangup(
+                audio_url=settings.resolved_reject_audio_url,
+                text=settings.reject_message,
+                tts_voice=settings.tts_voice,
+            )
+        )
 
     if call_id and result in ABANDONED_QUEUE_RESULTS:
         logger.info("caller left the queue call_id=%s result=%s after=%ss", call_id, result, waited)

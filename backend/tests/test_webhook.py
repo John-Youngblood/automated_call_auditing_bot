@@ -7,6 +7,7 @@ from xml.etree.ElementTree import fromstring
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.telephony import TWILIO_HOLD_MUSIC
 from app.telephony.signature import compute_twilio_signature
 
 TWILIO_FORM = {
@@ -86,17 +87,15 @@ class TestSpeechResult:
         response = self.speak(client, "I have a question for your guest.")
 
         assert response.status_code == 200
-        # <Enqueue> holds the call open with Twilio's own hold music -- no
-        # queue to pre-create, no hold audio to host, no redirect loop.
+        # <Enqueue> holds the call open -- no queue to pre-create in Twilio.
         enqueue = fromstring(response.text).find("Enqueue")
         assert enqueue is not None
         assert enqueue.text == "screening"
         # Without an action URL nothing ever tells us the caller gave up while
         # holding -- there is no other connection to this service.
         assert enqueue.attrib["action"] == "https://calls.example.test/webhook/queue-exit"
-        # No HOLD_MUSIC_URL configured, so no waitUrl at all -- that is what
-        # gets Twilio's default playlist rather than silence.
-        assert "waitUrl" not in enqueue.attrib
+        # Ours rather than the music: see TestHoldMusic and TestMaxHold.
+        assert enqueue.attrib["waitUrl"] == "https://calls.example.test/webhook/hold-wait"
 
         call = client.get("/api/calls/CA0123456789").json()
         assert call["transcript"] == "I have a question for your guest."
@@ -186,6 +185,16 @@ class TestSignatureValidation:
             response = client.post(
                 "/webhook/speech-result",
                 data={"CallSid": "CA1", "SpeechResult": "let me in"},
+            )
+
+        assert response.status_code == 403
+
+    def test_hold_wait_is_also_verified(self, make_client) -> None:
+        """An unsigned post here could pass a huge QueueTime and pull a caller
+        out of the queue."""
+        with make_client(VALIDATE_WEBHOOK_SIGNATURE="true", TWILIO_AUTH_TOKEN=self.TOKEN) as client:
+            response = client.post(
+                "/webhook/hold-wait", data={"CallSid": "CA1", "QueueTime": "99999"}
             )
 
         assert response.status_code == 403
@@ -298,7 +307,7 @@ class TestQueueExit:
         assert client.get(f"/api/calls/{TWILIO_FORM['CallSid']}").json()["status"] == "accepted"
 
     def test_every_abandon_result_ends_the_call(self, client: TestClient) -> None:
-        for result in ("hangup", "leave", "error", "system-error", "queue-full"):
+        for result in ("hangup", "error", "system-error", "queue-full"):
             call_id = f"CA-q-{result}"
             client.post("/webhook/incoming-call", data={**TWILIO_FORM, "CallSid": call_id})
             client.post("/webhook/queue-exit", data={"CallSid": call_id, "QueueResult": result})
@@ -312,69 +321,113 @@ class TestQueueExit:
         assert response.status_code == 200
 
 
-class TestHoldMusic:
-    """One audio file, looped by Twilio for as long as the caller waits."""
+def hold_wait(client: TestClient, waited: str = "0"):
+    """What Twilio gets back when it asks what a holding caller hears next."""
+    response = client.post(
+        "/webhook/hold-wait", data={"CallSid": TWILIO_FORM["CallSid"], "QueueTime": waited}
+    )
+    assert response.status_code == 200
+    return fromstring(response.text)
 
-    def hold_twiml(self, client: TestClient):
+
+class TestHoldMusic:
+    """Twilio asks /webhook/hold-wait what to play each time a track ends."""
+
+    def test_the_wait_url_is_ours_and_posted(self, client: TestClient) -> None:
+        """Ours, so every loop can check how long they have waited. POST, so the
+        TwiML answer is never cached -- the audio inside it still is."""
         client.post("/webhook/incoming-call", data=TWILIO_FORM)
         response = client.post(
             "/webhook/speech-result",
-            data={"CallSid": TWILIO_FORM["CallSid"], "SpeechResult": "Hello", "Confidence": "0.9"},
+            data={"CallSid": TWILIO_FORM["CallSid"], "SpeechResult": "Hello"},
         )
-        return fromstring(response.text).find("Enqueue")
+        enqueue = fromstring(response.text).find("Enqueue")
+
+        assert enqueue.attrib["waitUrl"] == "https://calls.example.test/webhook/hold-wait"
+        assert enqueue.attrib["waitUrlMethod"] == "POST"
+
+    def test_blank_plays_twilios_own_music(self, client: TestClient) -> None:
+        assert hold_wait(client).findtext("Play") in TWILIO_HOLD_MUSIC
 
     def test_an_absolute_url_is_used_as_given(self, make_client) -> None:
-        client = make_client(HOLD_MUSIC_URL="https://cdn.example.test/hold.mp3")
-        with client:
-            enqueue = self.hold_twiml(client)
-
-        assert enqueue is not None
-        assert enqueue.attrib["waitUrl"] == "https://cdn.example.test/hold.mp3"
+        with make_client(HOLD_MUSIC_URL="https://cdn.example.test/hold.mp3") as client:
+            assert hold_wait(client).findtext("Play") == "https://cdn.example.test/hold.mp3"
 
     def test_a_bare_filename_is_served_from_this_backend(self, make_client, static_dir) -> None:
         """The form that survives a rotating tunnel: .env cannot interpolate
         PUBLIC_BASE_URL, so a filename is rebuilt against the current base."""
         (static_dir / "h3_podcast_theme.mp3").touch()
-        client = make_client(HOLD_MUSIC_URL="h3_podcast_theme.mp3")
-        with client:
-            enqueue = self.hold_twiml(client)
-
-        assert enqueue is not None
-        assert (
-            enqueue.attrib["waitUrl"]
-            == "https://calls.example.test/static/h3_podcast_theme.mp3"
-        )
+        with make_client(HOLD_MUSIC_URL="h3_podcast_theme.mp3") as client:
+            assert (
+                hold_wait(client).findtext("Play")
+                == "https://calls.example.test/static/h3_podcast_theme.mp3"
+            )
 
     def test_a_leading_slash_does_not_double_up(self, make_client, static_dir) -> None:
         (static_dir / "theme.mp3").touch()
-        client = make_client(HOLD_MUSIC_URL="/theme.mp3")
-        with client:
-            enqueue = self.hold_twiml(client)
-
-        assert enqueue is not None
-        assert enqueue.attrib["waitUrl"] == "https://calls.example.test/static/theme.mp3"
+        with make_client(HOLD_MUSIC_URL="/theme.mp3") as client:
+            assert hold_wait(client).findtext("Play") == "https://calls.example.test/static/theme.mp3"
 
     def test_a_listed_file_that_is_missing_gets_twilios_music(self, make_client) -> None:
-        """No waitUrl at all, rather than one Twilio fails to fetch on every loop."""
-        client = make_client(HOLD_MUSIC_URL="not-there.mp3")
-        with client:
-            enqueue = self.hold_twiml(client)
+        with make_client(HOLD_MUSIC_URL="not-there.mp3") as client:
+            assert hold_wait(client).findtext("Play") in TWILIO_HOLD_MUSIC
 
-        assert enqueue is not None
-        assert "waitUrl" not in enqueue.attrib
 
-    def test_wait_url_is_fetched_with_get(self, make_client) -> None:
-        """Twilio only caches a static audio file when it GETs it. Left as the
-        POST that `action` uses, the same MP3 is re-downloaded on every loop
-        of every waiting caller."""
-        client = make_client(HOLD_MUSIC_URL="https://cdn.example.test/hold.mp3")
-        with client:
-            enqueue = self.hold_twiml(client)
+class TestMaxHold:
+    """A hold ends at MAX_HOLD_MINUTES: hold-wait answers <Leave>, and the
+    queue exit that follows plays the reject message before hanging up."""
 
-        assert enqueue is not None
-        assert enqueue.attrib["waitUrlMethod"] == "GET"
-        # The action URL is unaffected -- it is our webhook, not an audio file.
-        assert enqueue.attrib["method"] == "POST"
+    def test_the_default_is_an_hour(self, client: TestClient) -> None:
+        assert hold_wait(client, "3599").find("Leave") is None
+        assert [child.tag for child in hold_wait(client, "3600")] == ["Leave"]
+
+    def test_the_limit_is_configurable(self, make_client) -> None:
+        with make_client(MAX_HOLD_MINUTES="20") as client:
+            assert hold_wait(client, "1199").find("Play") is not None
+            assert [child.tag for child in hold_wait(client, "1200")] == ["Leave"]
+
+    def test_zero_means_no_limit(self, make_client) -> None:
+        """Twilio's own 4-hour cap on any call still applies."""
+        with make_client(MAX_HOLD_MINUTES="0") as client:
+            assert hold_wait(client, str(4 * 60 * 60)).find("Leave") is None
+
+    def test_a_garbled_queue_time_keeps_them_holding(self, client: TestClient) -> None:
+        """Better one more track than hanging up on someone by accident."""
+        assert hold_wait(client, "soon").find("Play") is not None
+
+    def test_leaving_plays_the_reject_message_and_hangs_up(self, make_client) -> None:
+        with make_client(REJECT_MESSAGE="Sorry, we ran out of time.") as client:
+            client.post("/webhook/incoming-call", data=TWILIO_FORM)
+            client.post(
+                "/webhook/speech-result",
+                data={"CallSid": TWILIO_FORM["CallSid"], "SpeechResult": "Hello"},
+            )
+            response = client.post(
+                "/webhook/queue-exit",
+                data={
+                    "CallSid": TWILIO_FORM["CallSid"],
+                    "QueueResult": "leave",
+                    "QueueTime": "3600",
+                },
+            )
+            doc = fromstring(response.text)
+
+            assert [child.tag for child in doc] == ["Say", "Hangup"]
+            assert doc.findtext("Say") == "Sorry, we ran out of time."
+            # Off the live queue and into history, like any caller who left.
+            assert client.get("/api/calls").json() == []
+            assert client.get(f"/api/calls/{TWILIO_FORM['CallSid']}").json()["status"] == "ended"
+
+    def test_the_reject_recording_is_used_when_set(self, make_client, static_dir) -> None:
+        (static_dir / "bye.mp3").touch()
+        with make_client(REJECT_AUDIO_URL="bye.mp3") as client:
+            response = client.post(
+                "/webhook/queue-exit", data={"CallSid": "CA-any", "QueueResult": "leave"}
+            )
+        doc = fromstring(response.text)
+
+        assert [child.tag for child in doc] == ["Play", "Hangup"]
+        assert doc.findtext("Play") == "https://calls.example.test/static/bye.mp3"
 
 
 class TestGreetingResolution:

@@ -86,7 +86,25 @@ There are no bundled defaults. A greeting that fell back to a file on disk
 used to mean clearing `GREETING_AUDIO_URL` kept playing the old recording.
 
 The one asymmetry is **hold music**: it is music, so it has no text to fall
-back on. Blank or missing omits `waitUrl`, and Twilio plays its own playlist.
+back on. Blank or missing plays one of Twilio's own classical tracks.
+
+### How a hold times out
+
+`<Enqueue waitUrl>` points at `/webhook/hold-wait`, not at the music. Twilio
+requests it each time the previous track ends, with `QueueTime` attached, and
+the answer is either one more track or, past `MAX_HOLD_MINUTES`, `<Leave>`.
+Twilio then requests the `<Enqueue action>` with `QueueResult=leave`, and
+`/webhook/queue-exit` plays the reject message and hangs up.
+
+No timer of our own, deliberately. A timer dies with the process, and a
+scaled-to-zero Cloud Run instance with the line left open and nobody watching
+is exactly when a queue runs long. Twilio keeps asking regardless, and each
+request wakes the instance. The cost is precision: the check runs between
+tracks, so a hold can overrun by one track (about 2 minutes for the theme, 7-8
+for Twilio's classical tracks).
+
+Callers already holding when a new version deploys keep the waitUrl they were
+enqueued with, so the limit applies from their next call.
 
 ## Dependency direction
 

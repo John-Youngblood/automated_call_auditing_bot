@@ -2,6 +2,8 @@
 
     answer_and_gather()  greet, then listen for why they are calling
     hold()               park them while an operator reads the transcript
+    hold_music()         one track, while they hold
+    leave_queue()        take them out of the queue (their hold ran too long)
     dial()               put an accepted caller through to the host
     speak_and_hangup()   turn someone away with a reason
     hang_up()            end a leg we have no further plans for
@@ -83,20 +85,58 @@ def answer_and_gather(
     return _document(response)
 
 
-def hold(queue_name: str, action_url: str, wait_url: str = "") -> RenderedResponse:
+#: What Twilio plays by default while a caller holds -- its own classical
+#: playlist, taken from the twimlet it would otherwise use. Named here because
+#: the waitUrl is now ours (see :func:`hold`), so blank hold music has to mean
+#: "one of these" explicitly. Plain http: the bucket name has dots, so S3's
+#: wildcard certificate does not cover it, and this is how Twilio fetches them.
+TWILIO_HOLD_MUSIC = tuple(
+    f"http://com.twilio.music.classical.s3.amazonaws.com/{track}"
+    for track in (
+        "ClockworkWaltz.mp3",
+        "oldDog_-_endless_goodbye_%28instr.%29.mp3",
+        "MARKOVICHAMP-Borghestral.mp3",
+        "BusyStrings.mp3",
+        "ith_chopin-15-2.mp3",
+        "Mellotroniac_-_Flight_Of_Young_Hearts_Flute.mp3",
+        "ith_brahms-116-4.mp3",
+    )
+)
+
+
+def hold(queue_name: str, action_url: str, wait_url: str) -> RenderedResponse:
     """Park the caller while an operator reads their transcript.
 
-    ``action`` is the only thing that reports abandonment: nothing else tells
-    us a caller gave up waiting. Twilio posts ``QueueResult`` and ``QueueTime``.
-    """
-    attributes = {"action": action_url, "method": "POST"}
-    if wait_url:
-        # GET, not POST: Twilio only caches a static audio file it fetches with
-        # GET, so POST re-downloads the MP3 on every loop of every caller.
-        attributes |= {"waitUrl": wait_url, "waitUrlMethod": "GET"}
+    ``action`` is the only thing that reports how they left: Twilio posts
+    ``QueueResult`` and ``QueueTime``.
 
+    ``waitUrl`` is our webhook, not the music. Twilio requests it again each
+    time what it returned finishes playing, with ``QueueTime`` attached --
+    which is what lets the answer be :func:`leave_queue` once a hold has run
+    too long, with no timer of our own. POST, so a TwiML answer is never
+    cached; the audio inside it still is.
+    """
     response = Element("Response")
-    SubElement(response, "Enqueue", attributes).text = queue_name
+    SubElement(
+        response,
+        "Enqueue",
+        {"action": action_url, "method": "POST", "waitUrl": wait_url, "waitUrlMethod": "POST"},
+    ).text = queue_name
+    return _document(response)
+
+
+def hold_music(audio_url: str) -> RenderedResponse:
+    """One track. Twilio asks the waitUrl again when it ends, so this loops."""
+    response = Element("Response")
+    SubElement(response, "Play").text = audio_url
+    return _document(response)
+
+
+def leave_queue() -> RenderedResponse:
+    """End the hold. Twilio then requests ``<Enqueue action>`` with
+    ``QueueResult=leave``, and the caller is still on the line for it."""
+    response = Element("Response")
+    SubElement(response, "Leave")
     return _document(response)
 
 
