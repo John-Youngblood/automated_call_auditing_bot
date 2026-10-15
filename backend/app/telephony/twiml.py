@@ -4,7 +4,7 @@
     hold()               park them while an operator reads the transcript
     hold_music()         one track, while they hold
     leave_queue()        take them out of the queue (their hold ran too long)
-    dial()               put an accepted caller through to the host
+    dial()               tell an accepted caller, then put them through to the host
     speak_and_hangup()   turn someone away with a reason
     hang_up()            end a leg we have no further plans for
 
@@ -140,8 +140,18 @@ def leave_queue() -> RenderedResponse:
     return _document(response)
 
 
-def dial(destination: str, *, action_url: str = "") -> RenderedResponse:
-    """Put an accepted caller through to the host.
+def dial(
+    destination: str,
+    *,
+    action_url: str = "",
+    audio_url: str = "",
+    text: str = "",
+    tts_voice: str = "",
+) -> RenderedResponse:
+    """Tell an accepted caller they are going through, then put them through.
+
+    The message plays before ``<Dial>`` starts, so the host's phone rings only
+    once it has finished.
 
     ``action`` is the only thing that reports the outcome -- whether they
     talked, or the host's line was busy. It also changes what happens when the
@@ -150,6 +160,7 @@ def dial(destination: str, *, action_url: str = "") -> RenderedResponse:
     """
     attributes = {"action": action_url, "method": "POST"} if action_url else {}
     response = Element("Response")
+    voice(response, audio_url=audio_url, text=text, tts_voice=tts_voice)
     SubElement(response, "Dial", attributes).text = destination
     return _document(response)
 

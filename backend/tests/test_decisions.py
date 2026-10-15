@@ -119,8 +119,22 @@ class TestAccept:
             assert client.post("/api/calls/CA-dec-1/accept").status_code == 200
 
         doc = fromstring(sent_twiml(recorder, "CA-dec-1"))
-        assert [child.tag for child in doc] == ["Dial"]
+        assert [child.tag for child in doc] == ["Say", "Dial"]
+        assert doc.find("Say").text == "You've been accepted, connecting you now."
         assert doc.find("Dial").text == "+15035559999"
+
+    def test_a_recording_replaces_the_spoken_fallback(
+        self, make_client, recorder, static_dir
+    ) -> None:
+        (static_dir / "connecting.mp3").touch()
+        client = make_client(ACCEPTED_AUDIO_URL="connecting.mp3")
+        with client:
+            hold(client)
+            client.post("/api/calls/CA-dec-1/accept")
+
+        doc = fromstring(sent_twiml(recorder, "CA-dec-1"))
+        assert [child.tag for child in doc] == ["Play", "Dial"]
+        assert doc.find("Play").text == "https://calls.example.test/static/connecting.mp3"
 
     def test_a_call_that_already_ended_is_a_failure(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch

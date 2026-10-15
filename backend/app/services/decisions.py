@@ -48,6 +48,9 @@ async def put_on_air(call_id: str, destination: str, settings: Settings) -> bool
     twiml = dial(
         destination,
         action_url=f"{settings.public_base_url.rstrip('/')}{DIAL_COMPLETE_PATH}",
+        audio_url=settings.resolved_accepted_audio_url,
+        text=settings.accepted_message,
+        tts_voice=settings.tts_voice,
     ).body
     async with client:
         ok = await client.send_twiml(call_id, twiml)

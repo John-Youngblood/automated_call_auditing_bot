@@ -190,7 +190,7 @@ it plays; otherwise Twilio speaks the text in `TTS_VOICE`.
 | Rejected, or held past `MAX_HOLD_MINUTES` | `REJECT_AUDIO_URL` | `REJECT_MESSAGE`              |
 | Line closed (show is not live)           | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE`         |
 | Line closing while enqueue (show ending) | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE`             |
-| Accepted                                 | *(dialled to `HOST_PHONE_NUMBER`)* | —                             |
+| Accepted, before dialling `HOST_PHONE_NUMBER` | `ACCEPTED_AUDIO_URL` | `ACCEPTED_MESSAGE`      |
 
 Audio settings take an absolute URL if file is hosted online **or** put the file in `backend/app/static/` and reference it with the bare filename (ex: `GREETING_AUDIO_URL=greeting.mp3`). Use the filename in development — the tunnel hostname
 rotates and `.env` can't interpolate it. Use a CDN in production.

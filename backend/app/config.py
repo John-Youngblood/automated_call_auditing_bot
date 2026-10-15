@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     #: Blank means no waitUrl, which gets Twilio's own classical playlist.
     hold_music_url: str = ""
 
+    #: Played before <Dial>, so the host's phone only starts ringing once it
+    #: ends -- keep it short, and promise no exact timing.
+    accepted_audio_url: str = ""
+    accepted_message: str = "You've been accepted, connecting you now."
+
     reject_audio_url: str = ""
     reject_message: str = (
         "Thanks for calling. We are not able to take you on air this time. "
@@ -171,6 +176,7 @@ class Settings(BaseSettings):
         audio = {
             "GREETING_AUDIO_URL": self.greeting_audio_url,
             "HOLD_MUSIC_URL": self.hold_music_url,
+            "ACCEPTED_AUDIO_URL": self.accepted_audio_url,
             "REJECT_AUDIO_URL": self.reject_audio_url,
             "CLOSED_LINE_AUDIO_URL": self.closed_line_audio_url,
             "CLOSING_AUDIO_URL": self.closing_audio_url,
@@ -192,6 +198,10 @@ class Settings(BaseSettings):
     def resolved_hold_music_url(self) -> str:
         """Blank gets Twilio's own playlist -- music has no text to fall back on."""
         return self._audio_url(self.hold_music_url)
+
+    @property
+    def resolved_accepted_audio_url(self) -> str:
+        return self._audio_url(self.accepted_audio_url)
 
     @property
     def resolved_reject_audio_url(self) -> str:
