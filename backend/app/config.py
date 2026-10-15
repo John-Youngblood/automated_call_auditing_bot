@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     #: Created on demand by <Enqueue>; nothing to set up in the console.
     hold_queue_name: str = "screening"
 
+    #: Most callers on hold at once; Twilio drops anyone past it. Applied to
+    #: the queue at startup (see services/hold_queue.py). 1000 is Twilio's own
+    #: default for a new queue, 5000 its ceiling.
+    hold_queue_max_size: int = Field(default=1000, ge=1, le=5000)
+
     #: Longest a caller may hold before hearing the reject message and being
     #: hung up. 0 disables it, leaving only Twilio's own 4-hour cap on any call.
     #: Checked each time a hold track finishes, so it can run one track over.

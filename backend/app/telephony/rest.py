@@ -4,16 +4,18 @@ Most of this package is Twilio talking to us. This is the other direction:
 asking what Twilio currently knows, and telling it to change a live call.
 
     GET  /Queues.json                        find the hold queue by name
+    POST /Queues.json, /Queues/{sid}.json    create it, or change its size
     GET  /Queues/{sid}/Members.json          who is waiting in it
     GET  /Calls/{sid}.json                   who that caller actually is
     POST /Calls/{sid}.json                   send a live call new instructions
 
-The reads serve startup reconciliation. The write is every decision that
-reaches the caller: putting them on air, turning them down, and clearing the
-queue. See app/services/reconcile.py, app/services/decisions.py and
+The reads serve startup reconciliation, and the queue writes startup sizing.
+The call write is every decision that reaches the caller: putting them on air,
+turning them down, and clearing the queue. See app/services/reconcile.py,
+app/services/hold_queue.py, app/services/decisions.py and
 app/services/drain.py.
 
-Hand-rolled on ``httpx`` rather than ``twilio-python``: four endpoints, and
+Hand-rolled on ``httpx`` rather than ``twilio-python``: a few endpoints, and
 the official SDK is synchronous, so it would mean thread-offloading every call
 out of the loop that serves the dashboard sockets.
 """
@@ -140,6 +142,13 @@ class TwilioRestClient:
     async def _get(self, path: str) -> dict | None:
         return await self._request("GET", path)
 
+    async def _list_queues(self) -> list[dict] | None:
+        """Every queue on the account, or ``None`` when Twilio could not say."""
+        payload = await self._get("/Queues.json?PageSize=1000")
+        if payload is None:
+            return None
+        return payload.get("queues") or []
+
     async def find_queue_sid(self, friendly_name: str) -> str | None:
         """The SID of the queue with this name, or ``None`` if it has none.
 
@@ -147,21 +156,43 @@ class TwilioRestClient:
         anywhere in this codebase until we ask. A missing queue is the normal
         case on a cold account and not an error.
         """
-        payload = await self._get("/Queues.json?PageSize=1000")
-        if payload is None:
+        queues = await self._list_queues()
+        if queues is None:
             return None
-        for queue in payload.get("queues") or []:
-            if queue.get("friendly_name") == friendly_name:
-                logger.info(
-                    "hold queue %r sid=%s size=%s/%s",
-                    friendly_name,
-                    queue.get("sid"),
-                    queue.get("current_size"),
-                    queue.get("max_size"),
-                )
-                return queue.get("sid")
-        logger.info("no Twilio queue named %r yet", friendly_name)
-        return None
+        queue = _named(queues, friendly_name)
+        if queue is None:
+            logger.info("no Twilio queue named %r yet", friendly_name)
+            return None
+        logger.info(
+            "hold queue %r sid=%s size=%s/%s",
+            friendly_name,
+            queue.get("sid"),
+            queue.get("current_size"),
+            queue.get("max_size"),
+        )
+        return queue.get("sid")
+
+    async def size_queue(self, friendly_name: str, max_size: int) -> bool:
+        """Cap the named queue at ``max_size`` callers, creating it if needed.
+
+        Created here rather than left to ``<Enqueue>``, which would make it at
+        Twilio's default size and leave this setting unapplied until the next
+        restart. A failed listing is a failure, not "no queue": creating one
+        then could make a second queue with the same name.
+        """
+        queues = await self._list_queues()
+        if queues is None:
+            return False
+
+        queue = _named(queues, friendly_name)
+        if queue is None:
+            path, data = "/Queues.json", {"FriendlyName": friendly_name}
+        elif queue.get("max_size") == max_size:
+            return True
+        else:
+            path, data = f"/Queues/{queue.get('sid')}.json", {}
+
+        return await self._request("POST", path, {**data, "MaxSize": str(max_size)}) is not None
 
     async def list_queue_members(self, queue_sid: str) -> list[QueueMember]:
         """Everyone currently waiting in the queue, following pagination."""
@@ -242,6 +273,10 @@ class TwilioRestClient:
         """
         status, _ = await self._send("POST", f"/Calls/{call_sid}.json", data={"Twiml": twiml})
         return status is not None and status < httpx.codes.BAD_REQUEST
+
+
+def _named(queues: list[dict], friendly_name: str) -> dict | None:
+    return next((q for q in queues if q.get("friendly_name") == friendly_name), None)
 
 
 def client_from_settings(settings: Settings) -> TwilioRestClient | None:

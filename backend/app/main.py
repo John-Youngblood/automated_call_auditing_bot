@@ -25,6 +25,7 @@ from app.api.routes import calls, frontend, health, session, webhooks
 from app.config import STATIC_DIR, Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
+from app.services.hold_queue import size_hold_queue
 from app.services.line_state import LineState
 from app.services.reconcile import reconcile_hold_queue
 from app.services.sessions import MIN_PASSWORD_LENGTH, Sessions
@@ -130,19 +131,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Twilio would make the number refuse *new* calls in order to recover old
     # ones -- exactly the wrong trade. The queue fills in a moment later and
     # every dashboard is told over the socket.
-    reconciler: asyncio.Task[int] | None = None
+    # Queue sizing goes the same way, for the same reason.
+    background: list[asyncio.Task] = [
+        asyncio.create_task(size_hold_queue(settings), name="size-hold-queue")
+    ]
     if settings.reconcile_on_startup:
-        reconciler = asyncio.create_task(
-            reconcile_hold_queue(app.state.registry, settings), name="reconcile-hold-queue"
+        background.append(
+            asyncio.create_task(
+                reconcile_hold_queue(app.state.registry, settings), name="reconcile-hold-queue"
+            )
         )
 
     try:
         yield
     finally:
-        if reconciler is not None and not reconciler.done():
-            reconciler.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await reconciler
+        for task in background:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         # Release dashboards before the server stops accepting, so clients see
         # a clean close and reconnect rather than a timeout.
         broadcaster.close_all()

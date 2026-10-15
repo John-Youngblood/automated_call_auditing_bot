@@ -86,7 +86,8 @@ def patch_twilio(monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
 
 @pytest.fixture(autouse=True)
 def twilio(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """A stand-in Twilio that accepts every command, and records the SIDs.
+    """A stand-in Twilio that accepts every command, and records the SIDs of
+    the calls it was told to change. Startup queue sizing is not recorded.
 
     Autouse, because almost every test here is about screening behaviour and
     should not also be a test of whether the carrier is reachable. Tests that
@@ -98,7 +99,8 @@ def twilio(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     def handler(request: httpx.Request) -> httpx.Response:
         sid = request.url.path.rsplit("/", 1)[-1].removesuffix(".json")
         if request.method == "POST":
-            commanded.append(sid)
+            if "/Calls/" in request.url.path:
+                commanded.append(sid)
             return httpx.Response(200, json={"sid": sid, "status": "completed"})
         return httpx.Response(
             200,

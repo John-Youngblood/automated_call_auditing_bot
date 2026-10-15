@@ -106,6 +106,19 @@ for Twilio's classical tracks).
 Callers already holding when a new version deploys keep the waitUrl they were
 enqueued with, so the limit applies from their next call.
 
+### How big the queue can get
+
+`HOLD_QUEUE_MAX_SIZE` is set on Twilio's queue at startup
+(`services/hold_queue.py`), not in any TwiML. A size is a property of the
+queue, so it applies to everyone. The app creates the queue itself if it does
+not exist yet; leaving that to `<Enqueue>` would make it at Twilio's default
+of 1000 until the next restart. A caller who arrives when it is full gets
+`QueueResult=queue-full` and is dropped.
+
+The size, not `MAX_HOLD_MINUTES`, is what bounds the cost of holding. If
+callers ring straight back after timing out, the queue stays full, so the
+bill is the queue size times the time the line is open.
+
 ## Dependency direction
 
 ```
