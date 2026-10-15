@@ -56,7 +56,21 @@ dashboard with its transcript.
 
 **Accept and Reject need Twilio credentials.** They issue real REST commands,
 so without `TWILIO_ACCOUNT_SID` and an API key they return `503` rather than
-pretending to work. Everything else works offline.
+pretending to work. Even with credentials, Twilio has never heard of a
+simulated call, so accepting one fails. Everything else works offline.
+
+**Demo mode** makes Accept, Reject and closing the line succeed without
+contacting Twilio, so simulated calls go all the way through — for a demo or a
+screen recording. It also shows `+1 555-555-1234` in the header instead of
+`TWILIO_PHONE_NUMBER`. Set both in `.env`, then `make up`:
+
+```
+APP_ENV=local
+DEMO_MODE=true
+```
+
+It refuses to start with any other `APP_ENV`, since real callers would be left
+on hold while the dashboard said they were on air.
 
 ### Running it for a real show
 

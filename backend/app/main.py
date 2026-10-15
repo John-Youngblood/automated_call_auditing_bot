@@ -78,7 +78,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.public_base_url,
         "open" if app.state.line.is_open else "CLOSED",
     )
-    if client_from_settings(settings) is None:
+    # Demo mode reports success for commands Twilio never receives. With real
+    # callers that means someone left on hold while the dashboard says they
+    # are on air, so it only runs where no real caller can reach it.
+    if settings.demo_mode:
+        if settings.app_env != "local":
+            raise RuntimeError(
+                "DEMO_MODE is on outside APP_ENV=local. Accept and Reject would "
+                "report success while real callers stayed on hold."
+            )
+        log.warning("DEMO_MODE is on -- nothing is sent to Twilio")
+    elif client_from_settings(settings) is None:
         log.warning(
             "no Twilio REST credentials -- accept, reject and closing the line "
             "will fail until TWILIO_ACCOUNT_SID and an API key are set"
@@ -131,11 +141,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Twilio would make the number refuse *new* calls in order to recover old
     # ones -- exactly the wrong trade. The queue fills in a moment later and
     # every dashboard is told over the socket.
-    # Queue sizing goes the same way, for the same reason.
-    background: list[asyncio.Task] = [
-        asyncio.create_task(size_hold_queue(settings), name="size-hold-queue")
-    ]
-    if settings.reconcile_on_startup:
+    # Queue sizing goes the same way, for the same reason. Neither has anything
+    # to do in demo mode, where there is no Twilio queue.
+    background: list[asyncio.Task] = []
+    if not settings.demo_mode:
+        background.append(asyncio.create_task(size_hold_queue(settings), name="size-hold-queue"))
+    if settings.reconcile_on_startup and not settings.demo_mode:
         background.append(
             asyncio.create_task(
                 reconcile_hold_queue(app.state.registry, settings), name="reconcile-hold-queue"

@@ -377,9 +377,9 @@ class TestMaxHold:
     """A hold ends at MAX_HOLD_MINUTES: hold-wait answers <Leave>, and the
     queue exit that follows plays the reject message before hanging up."""
 
-    def test_the_default_is_an_hour(self, client: TestClient) -> None:
-        assert hold_wait(client, "3599").find("Leave") is None
-        assert [child.tag for child in hold_wait(client, "3600")] == ["Leave"]
+    def test_the_default_is_half_an_hour(self, client: TestClient) -> None:
+        assert hold_wait(client, "1799").find("Leave") is None
+        assert [child.tag for child in hold_wait(client, "1800")] == ["Leave"]
 
     def test_the_limit_is_configurable(self, make_client) -> None:
         with make_client(MAX_HOLD_MINUTES="20") as client:

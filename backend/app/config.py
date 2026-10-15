@@ -19,6 +19,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: Where bare audio filenames live. main.py serves it at /static.
 STATIC_DIR = Path(__file__).parent / "static"
 
+#: Shown in the dashboard header in demo mode instead of TWILIO_PHONE_NUMBER,
+#: so a recording never shows the real number.
+DEMO_PHONE_NUMBER = "+15555551234"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -90,16 +94,22 @@ class Settings(BaseSettings):
 
     #: Most callers on hold at once; Twilio drops anyone past it. Applied to
     #: the queue at startup (see services/hold_queue.py). 1000 is Twilio's own
-    #: default for a new queue, 5000 its ceiling.
-    hold_queue_max_size: int = Field(default=1000, ge=1, le=5000)
+    #: default for a new queue, 5000 its ceiling; 200 keeps the bill in check.
+    hold_queue_max_size: int = Field(default=200, ge=1, le=5000)
 
     #: Longest a caller may hold before hearing the reject message and being
     #: hung up. 0 disables it, leaving only Twilio's own 4-hour cap on any call.
     #: Checked each time a hold track finishes, so it can run one track over.
-    max_hold_minutes: int = Field(default=60, ge=0)
+    max_hold_minutes: int = Field(default=30, ge=0)
 
     #: Open on start, so a deploy cannot silently take the show off air.
     line_open_on_start: bool = True
+
+    #: Accept, Reject and closing the line succeed without contacting Twilio,
+    #: so simulated calls (which Twilio has never heard of) can be accepted.
+    #: main.py refuses it outside local: a real caller would stay on hold
+    #: while the dashboard said they were on air.
+    demo_mode: bool = False
 
     #: The host's phone. One number by design: one host, one on-air slot. The
     #: default is a placeholder main.py refuses to start on outside local.
@@ -149,6 +159,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
+    @property
+    def shown_phone_number(self) -> str:
+        return DEMO_PHONE_NUMBER if self.demo_mode else self.twilio_phone_number
 
     def _audio_url(self, configured: str) -> str:
         """URL for something the caller will hear, or "" to speak the text.

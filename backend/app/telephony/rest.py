@@ -275,6 +275,29 @@ class TwilioRestClient:
         return status is not None and status < httpx.codes.BAD_REQUEST
 
 
+class DemoTwilioClient(TwilioRestClient):
+    """DEMO_MODE: every command succeeds and nothing reaches Twilio.
+
+    For simulated calls. A real client would get a 404 for their made-up SIDs,
+    so Accept would fail. Reads answer as an empty account.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(account_sid="demo", username="", password="")
+
+    async def __aenter__(self) -> DemoTwilioClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def _send(
+        self, method: str, path: str, data: dict[str, str] | None = None
+    ) -> tuple[int | None, dict | None]:
+        logger.info("demo mode: not sending %s %s to Twilio", method, path)
+        return httpx.codes.OK, {}
+
+
 def _named(queues: list[dict], friendly_name: str) -> dict | None:
     return next((q for q in queues if q.get("friendly_name") == friendly_name), None)
 
@@ -287,6 +310,8 @@ def client_from_settings(settings: Settings) -> TwilioRestClient | None:
     ``None`` rather than raising lets each caller decide what unconfigured
     means for it: reconciliation skips, a screening decision fails loudly.
     """
+    if settings.demo_mode:
+        return DemoTwilioClient()
     if not settings.twilio_account_sid:
         return None
 

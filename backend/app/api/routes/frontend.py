@@ -75,7 +75,7 @@ async def frontend_stream(
             ServerEvent.snapshot(
                 registry.open_calls(),
                 line_open=line.is_open,
-                screening_number=settings.twilio_phone_number,
+                screening_number=settings.shown_phone_number,
             ).to_wire()
         )
 
