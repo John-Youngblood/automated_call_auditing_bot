@@ -8,6 +8,10 @@ work on the dashboard with no phone number, no tunnel, and no real caller.
     python scripts/simulate_call.py                 # one call
     python scripts/simulate_call.py --calls 3       # a small queue
     python scripts/simulate_call.py --say "I have a question for your guest"
+
+When the backend validates webhook signatures (the office stack always does),
+requests are signed with TWILIO_AUTH_TOKEN from the same .env, so they pass
+the check a real Twilio request would.
 """
 
 from __future__ import annotations
@@ -17,8 +21,14 @@ import asyncio
 import random
 import string
 import sys
+from pathlib import Path
 
 import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.config import get_settings  # noqa: E402
+from app.telephony.signature import compute_twilio_signature  # noqa: E402
 
 #: What a caller might say when asked why they are calling. Deliberately a
 #: mix: a good caller, a rambler, someone on the wrong number, and one you
@@ -36,6 +46,25 @@ REASONS = [
 ]
 
 
+async def post_webhook(
+    client: httpx.AsyncClient, base: str, path: str, data: dict[str, str]
+) -> None:
+    """POST as Twilio would, signed when the backend checks signatures.
+
+    Signed against PUBLIC_BASE_URL, not ``base``: the backend rebuilds the URL
+    from that setting, because it is the address Twilio actually requests.
+    """
+    settings = get_settings()
+    headers = {}
+    if settings.validate_webhook_signature:
+        url = f"{settings.public_base_url.rstrip('/')}{path}"
+        headers["X-Twilio-Signature"] = compute_twilio_signature(
+            settings.twilio_auth_token, url, data
+        )
+    response = await client.post(f"{base}{path}", data=data, headers=headers)
+    response.raise_for_status()
+
+
 def call_sid() -> str:
     return "CA" + "".join(random.choices(string.ascii_lowercase + string.digits, k=20))
 
@@ -45,9 +74,11 @@ async def place_call(client: httpx.AsyncClient, base: str, reason: str, delay: f
     sid = call_sid()
     number = f"+1503555{random.randint(1000, 9999)}"
 
-    answer = await client.post(
-        f"{base}/webhook/incoming-call",
-        data={
+    await post_webhook(
+        client,
+        base,
+        "/webhook/incoming-call",
+        {
             "CallSid": sid,
             "From": number,
             "To": "+15039990000",
@@ -58,22 +89,22 @@ async def place_call(client: httpx.AsyncClient, base: str, reason: str, delay: f
             "CallStatus": "ringing",
         },
     )
-    answer.raise_for_status()
 
     print(f"[{sid}] ringing from {number}, greeting playing")
 
     # Twilio would spend this time playing the greeting and listening.
     await asyncio.sleep(2.5)
 
-    result = await client.post(
-        f"{base}/webhook/speech-result",
-        data={
+    await post_webhook(
+        client,
+        base,
+        "/webhook/speech-result",
+        {
             "CallSid": sid,
             "SpeechResult": reason,
             "Confidence": f"{random.uniform(0.82, 0.98):.4f}",
         },
     )
-    result.raise_for_status()
     print(f"[{sid}] transcript delivered, caller now on hold")
 
 
