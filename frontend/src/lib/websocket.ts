@@ -18,8 +18,12 @@
  *   cannot serve this purpose.
  * - **Intentional closes get retried.** Navigating away or unmounting must
  *   stop reconnection, or React's StrictMode double-mount leaves a
- *   stray socket reconnecting forever.
+ *   stray socket reconnecting forever. The same goes for the server refusing
+ *   the session: retrying a token it has forgotten can never succeed.
  */
+
+/** Server close code for a missing or forgotten session (mirrors HTTP 401). */
+const UNAUTHORIZED_CLOSE_CODE = 4401;
 
 export interface ReconnectingSocketOptions {
   url: string;
@@ -31,6 +35,8 @@ export interface ReconnectingSocketOptions {
   protocols?: string[];
   onMessage: (data: unknown) => void;
   onStatusChange?: (status: 'connecting' | 'open' | 'reconnecting' | 'closed') => void;
+  /** The server refused the session. Reconnection stops before this fires. */
+  onUnauthorized?: () => void;
   /** Heartbeat cadence. Must be well under the server's idle timeout. */
   heartbeatIntervalMs?: number;
   /** Reconnect if nothing is received for this long. */
@@ -56,7 +62,13 @@ export class ReconnectingSocket {
   private stallTimer: number | null = null;
 
   constructor(options: ReconnectingSocketOptions) {
-    this.options = { onStatusChange: () => {}, protocols: [], ...DEFAULTS, ...options };
+    this.options = {
+      onStatusChange: () => {},
+      onUnauthorized: () => {},
+      protocols: [],
+      ...DEFAULTS,
+      ...options,
+    };
   }
 
   connect(): void {
@@ -96,6 +108,12 @@ export class ReconnectingSocket {
       this.clearTimer('stall');
       if (this.closedByCaller) {
         this.options.onStatusChange('closed');
+        return;
+      }
+      if (event.code === UNAUTHORIZED_CLOSE_CODE) {
+        this.closedByCaller = true;
+        this.options.onStatusChange('closed');
+        this.options.onUnauthorized();
         return;
       }
       console.info(`[ws] closed (code ${event.code}), reconnecting`);

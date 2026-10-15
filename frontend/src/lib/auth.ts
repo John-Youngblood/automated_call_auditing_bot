@@ -7,7 +7,9 @@
  * this origin, which on a page with no third-party scripts is nothing new.
  *
  * Tokens die when the backend restarts, so the client has to treat a 401 as
- * "sign in again" rather than an error worth retrying.
+ * "sign in again" rather than an error worth retrying. Both the REST client
+ * and the socket report it through `expireSession`, which drops the token and
+ * tells the app to show the sign-in screen.
  */
 
 const STORAGE_KEY = 'callScreener.token';
@@ -35,4 +37,20 @@ export function clearToken(): void {
   } catch {
     // Nothing to do; the caller is signing out either way.
   }
+}
+
+let sessionExpiredListener: (() => void) | null = null;
+
+/** Register the app's sign-out. Returns an unsubscribe for effect cleanup. */
+export function onSessionExpired(listener: () => void): () => void {
+  sessionExpiredListener = listener;
+  return () => {
+    if (sessionExpiredListener === listener) sessionExpiredListener = null;
+  };
+}
+
+/** The server no longer knows this token: forget it and go back to sign-in. */
+export function expireSession(): void {
+  clearToken();
+  sessionExpiredListener?.();
 }

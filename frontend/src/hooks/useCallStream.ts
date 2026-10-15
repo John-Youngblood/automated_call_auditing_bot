@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { ApiError, callsApi } from '../lib/api';
-import { readToken } from '../lib/auth';
+import { expireSession, readToken } from '../lib/auth';
 import { ReconnectingSocket, resolveWebSocketUrl } from '../lib/websocket';
 import type { Call, ConnectionStatus, ServerEvent } from '../types/events';
 import { isServerEvent, isTerminal } from '../types/events';
@@ -162,8 +162,8 @@ export function useCallStream(): UseCallStream {
   useEffect(() => {
     const socket = new ReconnectingSocket({
       url: resolveWebSocketUrl('/ws/frontend'),
-      // "bearer" first, then the token: the server checks this before
-      // accepting, so an expired session is refused at the handshake.
+      // "bearer" first, then the token. An expired session is closed with
+      // 4401, which stops reconnection and signs out.
       protocols: (() => {
         const token = readToken();
         return token ? ['bearer', token] : [];
@@ -172,6 +172,8 @@ export function useCallStream(): UseCallStream {
         if (isServerEvent(data)) dispatch({ kind: 'event', event: data });
       },
       onStatusChange: (status) => dispatch({ kind: 'connection', status }),
+      // Usually a backend restart, which forgets every token.
+      onUnauthorized: expireSession,
     });
     socketRef.current = socket;
     socket.connect();

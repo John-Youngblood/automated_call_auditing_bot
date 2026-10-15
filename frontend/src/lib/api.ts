@@ -7,7 +7,7 @@
  */
 
 import type { Call, LineStateResult } from '../types/events';
-import { clearToken, readToken, storeToken } from './auth';
+import { clearToken, expireSession, readToken, storeToken } from './auth';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -39,7 +39,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (response.status === 401) {
     // Drop it rather than keep retrying with a token the server has forgotten.
-    clearToken();
+    expireSession();
   }
 
   if (!response.ok) {

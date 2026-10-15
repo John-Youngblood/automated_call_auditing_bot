@@ -10,6 +10,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.auth import WS_UNAUTHORIZED
+
 PASSWORD = "correct-horse-battery-staple"
 GUARDED = {"DASHBOARD_PASSWORD": PASSWORD}
 
@@ -85,11 +87,19 @@ class TestWebhooksStayOpen:
 
 
 class TestWebsocket:
-    def test_it_is_refused_without_a_token(self, secured: TestClient) -> None:
+    @pytest.mark.parametrize("subprotocols", [None, ["bearer", "forgotten-by-a-restart"]])
+    def test_it_is_refused_with_4401(self, secured: TestClient, subprotocols) -> None:
+        """Accepted, then closed with 4401: refusing at the handshake reaches
+        the browser as 1006, indistinguishable from a dropped network, and the
+        dashboard would retry a dead token forever instead of signing out."""
         from starlette.websockets import WebSocketDisconnect
 
-        with pytest.raises(WebSocketDisconnect), secured.websocket_connect("/ws/frontend"):
-            pass
+        with (
+            pytest.raises(WebSocketDisconnect) as refused,
+            secured.websocket_connect("/ws/frontend", subprotocols=subprotocols) as ws,
+        ):
+            ws.receive_json()
+        assert refused.value.code == WS_UNAUTHORIZED
 
     def test_the_token_travels_as_a_subprotocol(self, secured: TestClient) -> None:
         """Not a query string: browsers cannot set headers on a WebSocket, and

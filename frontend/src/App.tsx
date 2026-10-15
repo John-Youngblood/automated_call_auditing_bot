@@ -1,8 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import Dashboard from './components/Dashboard';
 import LoginScreen from './components/LoginScreen';
-import { clearToken, readToken } from './lib/auth';
+import { clearToken, onSessionExpired, readToken } from './lib/auth';
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(() => readToken() !== null);
@@ -15,6 +15,8 @@ export default function App() {
     clearToken();
     setSignedIn(false);
   }, []);
+
+  useEffect(() => onSessionExpired(signOut), [signOut]);
 
   if (!signedIn) return <LoginScreen onSignedIn={() => setSignedIn(true)} />;
   return <Dashboard onSignedOut={signOut} />;

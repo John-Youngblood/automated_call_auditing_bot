@@ -21,6 +21,10 @@ from app.services.sessions import Sessions
 #: Sent by the browser as `new WebSocket(url, ["bearer", token])`.
 WS_PROTOCOL = "bearer"
 
+#: Close code for a socket without a valid session -- the websocket stand-in
+#: for HTTP 401, and the dashboard's cue to stop reconnecting and sign in.
+WS_UNAUTHORIZED = 4401
+
 
 def provide_sessions(conn: HTTPConnection) -> Sessions:
     return conn.app.state.sessions
