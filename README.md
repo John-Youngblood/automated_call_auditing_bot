@@ -2,9 +2,36 @@
 
 ![h3_logo.png](frontend/public/h3_logo.png)
 
-Screens inbound phone calls for the H3 live podcast. A caller is greeted, asked why
-they're calling, and put on hold. Their transcribed reason appears on a
-dashboard where an operator puts them on air or turns them away.
+A call-in queue for the H3 live podcast. Callers say why they're calling and
+wait on hold. Whoever has the dashboard open decides who goes on air.
+
+## Why
+
+Today the call-in number rings straight through to the studio phone. Whoever
+is on the line when the crew picks up gets on air, and everyone else gets
+voicemail. That means:
+
+- **Calling in is a full-time job.** You hang up the moment voicemail starts,
+  redial, and repeat for the whole episode. Listeners who tune in at work have
+  almost no chance of getting through.
+- **The crew picks up blind.** That leads to dead air, callers with no
+  question ready, the same callers getting through again, and calls that are
+  only there to praise the hosts.
+- **Screening calls by hand would take someone's full attention**, so it has
+  never happened.
+
+This tool puts a queue between the callers and the studio phone:
+
+1. A caller is asked what they want to talk about.
+2. Twilio transcribes the answer and puts the caller on hold.
+3. The dashboard shows everyone waiting: their number, what they said, and how
+   long they've been holding.
+4. **Accept** tells the caller they're through and rings the studio phone.
+   **Reject** plays them a short message and hangs up.
+
+Callers dial once and wait. The crew sees what each caller wants before
+picking up, and they can check the queue between segments instead of
+watching it all show. No AI decides who gets through. A person does.
 
 ```
    caller ──PSTN──▶ Twilio ──webhooks──▶ FastAPI ──websocket──▶ React dashboard
@@ -13,19 +40,16 @@ dashboard where an operator puts them on air or turns them away.
                          (bridge / hang up)
 ```
 
-**Twilio owns the hard part** — deciding when the caller has stopped talking —
-so this service handles no audio. No media streaming, no speech-to-text
-integration. The transcript arrives complete, in one webhook.
-
-**Nothing is stored on disk.** No database. Calls being screened and the last
-few hundred finished ones live in one in-memory registry.
+Twilio handles the audio, including detecting when the caller has finished
+talking, and sends the finished transcript in one webhook. Nothing is written
+to disk: live and recent calls are kept in memory.
 
 ---
 
-## Run it locally
+## Try it locally
 
 You need **Docker**, or **Python 3.12 + Node 24** (both pinned in
-`.tool-versions`). No Twilio account needed to try it.
+`.tool-versions`). You don't need a Twilio account to try it.
 
 ```bash
 cp .env.example .env
@@ -38,9 +62,9 @@ make up
 - Dashboard → <http://localhost:5173>
 - API docs → <http://localhost:8000/docs>
 
-> Port taken? Set `FRONTEND_PORT` / `BACKEND_PORT` in `.env`.
+If a port is already taken, set `FRONTEND_PORT` / `BACKEND_PORT` in `.env`.
 
-Now put some fake callers in the queue:
+Put some fake callers in the queue:
 
 ```bash
 make simulate CALLS=3
@@ -50,45 +74,138 @@ make simulate CALLS=3
 make simulate SAY="I have a question for your guest"
 ```
 
-`simulate_call.py` posts the same webhooks Twilio would, so the whole flow —
-greeting, transcript, queueing — runs without a phone. Each call appears in the
-dashboard with its transcript.
+These send the same webhooks Twilio would, so the greeting, transcript and
+queue all work without a phone.
 
-**Accept and Reject need Twilio credentials.** They issue real REST commands,
-so without `TWILIO_ACCOUNT_SID` and an API key they return `503` rather than
-pretending to work. Even with credentials, Twilio has never heard of a
-simulated call, so accepting one fails. Everything else works offline.
+**Accept and Reject need Twilio.** They send real commands to Twilio, so
+without credentials they return `503`. Even with credentials, Twilio doesn't
+know about a simulated call, so accepting one fails. For a demo or a screen
+recording, set `DEMO_MODE=true` (only allowed with `APP_ENV=local`). Accept,
+Reject and closing the line then work on simulated calls without contacting
+Twilio.
 
-**Demo mode** makes Accept, Reject and closing the line succeed without
-contacting Twilio, so simulated calls go all the way through — for a demo or a
-screen recording. It also shows `+1 555-555-1234` in the header instead of
-`TWILIO_PHONE_NUMBER`. Set both in `.env`, then `make up`:
+---
 
-```
-APP_ENV=local
-DEMO_MODE=true
-```
+## Taking real calls
 
-It refuses to start with any other `APP_ENV`, since real callers would be left
-on hold while the dashboard said they were on air.
+You need a Twilio account and two phone numbers:
 
-### Running it for a real show
+- **`TWILIO_PHONE_NUMBER`**: the public number listeners call. You buy it in
+  Twilio.
+- **`HOST_PHONE_NUMBER`**: the studio phone that accepted callers are put
+  through to. Keep it private. Anyone who has it can skip the queue.
 
-The development stack above reloads on every file save, which empties the
-queue. For an actual show, run the built images on a machine in the office and
-let everyone else open it over the LAN:
+**1. Make the app reachable.** Twilio connects over the internet, so the app
+needs a public URL. While you're testing:
 
 ```bash
-make office
+make tunnel
 ```
 
-Three containers: nginx serving the dashboard, the backend, and a Cloudflare
-tunnel so Twilio can reach it without touching the router. Colleagues need
-nothing installed. See **[docs/office.md](docs/office.md)** for the one-time
-setup, or **[docs/deploy.md](docs/deploy.md)** to run it on Google Cloud
-instead.
+This starts a Cloudflare quick tunnel and writes its address into
+`PUBLIC_BASE_URL`. `make url` prints that address.
 
-### Without Docker
+**2. Point the Twilio number at the app.** In the Twilio Console, open Phone
+Numbers → your number → Voice Configuration:
+
+| Field | Value |
+|---|---|
+| A call comes in | `<base>/webhook/incoming-call` |
+| Primary handler fails | a TwiML Bin saying "try again shortly" |
+| Call status changes | `<base>/webhook/call-status` |
+
+> ⚠️ A quick tunnel gets a **new hostname every time it restarts**, which
+> breaks all three fields. Use one for testing only.
+
+**3. Fill in `.env`:**
+
+```bash
+HOST_PHONE_NUMBER=+15035551234
+TWILIO_PHONE_NUMBER=+15035559876
+TWILIO_ACCOUNT_SID=AC…
+TWILIO_API_KEY_SID=SK…
+TWILIO_API_KEY_SECRET=…
+TWILIO_AUTH_TOKEN=…          # webhook signature checks need this one
+VALIDATE_WEBHOOK_SIGNATURE=true
+```
+
+### For an actual show
+
+`make up` reloads whenever a file changes, which empties the queue. For a live
+show, pick one of these setups:
+
+- **[A machine in the office](docs/office.md)** (`make office`). Recommended.
+  The app runs in Docker behind a named Cloudflare tunnel that keeps the same
+  hostname, and anyone on the office network can open the dashboard. Any spare
+  laptop works, or even a Raspberry Pi 4 or 5.
+- **[Google Cloud](docs/deploy.md)**, if the dashboard needs to be reachable
+  from outside the office.
+
+With `APP_ENV=production`, the app won't start without a `DASHBOARD_PASSWORD`
+and a real `HOST_PHONE_NUMBER`.
+
+---
+
+## Configuration
+
+Settings go in `.env`. Every setting is explained in
+[`.env.example`](.env.example). These are the ones you're most likely to
+change.
+
+### Cost and call handling
+
+Twilio bills every minute a caller is on hold. That makes the size of the queue
+and how long the line stays open the two numbers that decide the bill.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `HOLD_QUEUE_MAX_SIZE` | `200` | Most callers on hold at once. Anyone past it is dropped after giving their reason. |
+| `MAX_HOLD_MINUTES` | `30` | Longest anyone can hold before hearing the reject message. `0` = no limit. |
+| `LINE_OPEN_ON_START` | `true` | Whether the line is taking calls when the app starts. |
+| `RECONCILE_ON_STARTUP` | `true` | After a restart, puts callers who are still on hold back on the dashboard. |
+| `SPEECH_TIMEOUT_SECONDS` | `3` | Seconds of silence that count as "done talking". Raise it if callers get cut off. |
+| `DASHBOARD_PASSWORD` | *(blank)* | Shared login for the dashboard. Blank means no login, which is allowed only locally. |
+
+### What callers hear
+
+Each prompt can be an **audio file**, with **text spoken in `TTS_VOICE`**
+(default `Polly.Joanna`) as the fallback. If you set the audio, it plays;
+otherwise the text is read out. This means the greeting can be a crew member
+and the hold music can be anything you like.
+
+| Moment | Audio | Spoken fallback |
+|---|---|---|
+| Greeting / reason for calling | `GREETING_AUDIO_URL` | `GREETING_MESSAGE` |
+| Hold music | `HOLD_MUSIC_URL` | *(Twilio's default playlist)* |
+| Accepted, before the studio phone rings | `ACCEPTED_AUDIO_URL` | `ACCEPTED_MESSAGE` |
+| Rejected, or held past `MAX_HOLD_MINUTES` | `REJECT_AUDIO_URL` | `REJECT_MESSAGE` |
+| Calling while the line is closed | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE` |
+| On hold when the line closes | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE` |
+
+An audio setting takes either a full `https://` URL or the bare filename of a
+file in `backend/app/static/` (e.g. `GREETING_AUDIO_URL=greeting.mp3`).
+
+---
+
+## During a show
+
+- **Open / close the line** with the footer toggle. Closing it turns new
+  callers away *and* hangs up on everyone still on hold, so nobody waits on a
+  line no one is watching. Close it during ad reads or other stretches without
+  calls to save money.
+- **Clear out the queue now and then.** Rejecting callers you won't get to
+  saves money even when you aren't ready to take a call.
+- **Call History** lists finished calls, which ones made it on air, and for how
+  long. It's kept in memory, so it clears when the app restarts.
+- **Restarting is safe mid-show.** Callers still on hold come back on the
+  dashboard, but what they said can't be recovered, and the row says so.
+  A restart also signs everyone out of the dashboard.
+
+---
+
+## Development
+
+Without Docker:
 
 ```bash
 make install
@@ -102,141 +219,22 @@ cd backend && .venv/bin/python -m uvicorn app.main:app --reload
 cd frontend && npm run dev
 ```
 
-### Before you push
+Before you push, run the linter, the backend tests and the frontend typecheck:
 
 ```bash
 make check
 ```
 
-Ruff, the backend test suite, and a frontend typecheck. `make help` lists
-everything else.
+`make help` lists everything else. [docs/architecture.md](docs/architecture.md)
+explains where to start reading the code and why it's built the way it is.
 
 ---
 
-## Taking a real call
+## Future features
 
-Twilio dials in from the internet, so it needs a public URL.
-
-**1. Open a tunnel.** This starts `cloudflared`, rewrites `PUBLIC_BASE_URL` in
-`.env`, and recreates the backend so it picks the new hostname up:
-
-```bash
-make tunnel
-```
-
-**2. Point your Twilio number at it.** Console → Phone Numbers → your number →
-Voice Configuration. `make url` prints the base.
-
-| Field | Value |
+| Feature | Description |
 |---|---|
-| A call comes in | `<base>/webhook/incoming-call` |
-| Primary handler fails | a TwiML Bin saying "try again shortly" |
-| Call status changes | `<base>/webhook/call-status` |
-
-The other webhooks aren't configured here — their URLs are baked into the TwiML
-this service returns at each step.
-
-> ⚠️ A quick tunnel's hostname **rotates on every restart**, and all three
-> fields go stale together. `make tunnel` updates `.env` but can't update
-> Twilio. For anything beyond a test, use a named tunnel or a real deploy.
-
-**3. Set the host's phone**, or accepted callers get dialled nowhere:
-
-```bash
-HOST_PHONE_NUMBER=+15035551234
-```
-
-The service refuses to start on the placeholder outside `APP_ENV=local`.
-
-**4. Add Twilio credentials** so Accept, Reject and closing the line work:
-
-```bash
-TWILIO_ACCOUNT_SID=AC…
-TWILIO_API_KEY_SID=SK…
-TWILIO_API_KEY_SECRET=…
-TWILIO_AUTH_TOKEN=…          # signature checks need this one specifically
-VALIDATE_WEBHOOK_SIGNATURE=true
-```
-
-Both webhooks are public URLs. Unsigned, anyone who finds them can fabricate a
-call or put words in a caller's mouth.
-
----
-
-## Reading the code
-
-Start at `backend/app/api/routes/webhooks.py` — the whole call flow is four
-handlers, in order:
-
-| Endpoint | Returns | Caller hears |
-|---|---|---|
-| `incoming-call` | `<Gather>` with the greeting inside | the greeting, then silence while Twilio listens |
-| `speech-result` | `<Enqueue>` | hold music |
-| `queue-exit` | empty | *(they left the queue)* |
-| `dial-complete` | `<Hangup>` | *(their time with the host ended)* |
-
-Then:
-
-- `telephony/twiml.py` — the XML documents, one function each
-- `services/call_registry.py` — the single writer of call state
-- `services/decisions.py` — accept and reject
-- `frontend/src/hooks/useCallStream.ts` — one socket, one reducer
-
-**One rule explains most of the design:** the dashboard must never claim
-something the phone line didn't do. Twilio acts first, local state follows, and
-a command that fails leaves the call visible rather than quietly resolved.
-
-`docs/architecture.md` has the why — the trade-offs, the failure modes, and
-what to change when the assumptions stop holding. `docs/deploy.md` covers
-running it on Google Cloud.
-
----
-
-## What the caller hears
-
-Six moments, each an **audio file with a spoken fallback**. Set the audio and
-it plays; otherwise Twilio speaks the text in `TTS_VOICE`.
-
-| Moment                                   | Audio | Fallback                      |
-|------------------------------------------|---|-------------------------------|
-| Greeting/Reason for calling              | `GREETING_AUDIO_URL` | `GREETING_MESSAGE`            |
-| Hold music                               | `HOLD_MUSIC_URL` | *(Twilio's classic playlist)* |
-| Rejected, or held past `MAX_HOLD_MINUTES` | `REJECT_AUDIO_URL` | `REJECT_MESSAGE`              |
-| Line closed (show is not live)           | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE`         |
-| Line closing while enqueue (show ending) | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE`             |
-| Accepted, before dialling `HOST_PHONE_NUMBER` | `ACCEPTED_AUDIO_URL` | `ACCEPTED_MESSAGE`      |
-
-Audio settings take an absolute URL if file is hosted online **or** put the file in `backend/app/static/` and reference it with the bare filename (ex: `GREETING_AUDIO_URL=greeting.mp3`). Use the filename in development — the tunnel hostname
-rotates and `.env` can't interpolate it. Use a CDN in production.
-
----
-
-## Using it during a show
-
-**On air / off air.** The footer toggles the line. Closing it turns new callers
-away *and* hangs up on anyone still holding — one action, so nobody is left
-waiting on a line nobody is watching. It asks first.
-
-**Call History** shows finished calls, and marks which ones actually made it on
-air and for how long. It's in memory, so it clears when the backend restarts.
-
-**Signing in.** One shared `DASHBOARD_PASSWORD`, traded for a session token.
-No accounts, no reset flow. Tokens are held in memory, so a restart signs
-everyone out — which is also how you revoke one. Leave the password blank
-locally and the dashboard is open; anywhere else the service refuses to start
-without it.
-
-**A restart mid-show doesn't strand callers.** On boot the service asks Twilio
-who is still in the hold queue and puts them back on the dashboard. Their
-transcript can't be recovered — it only ever existed in memory — so those rows
-say so rather than looking like a caller who stayed silent.
-
----
-
-## Future Features
-
-| Feature                 | Description                                                                                                                                                                                       |
-|-------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Block Callers           | black list of numbers Twilio should not forward.                                                                                                                                                  |
-| Persistent call history | History lives in memory, capped at `CALL_HISTORY_SIZE` and cleared on restart. A database would also carry the transcript through a restart, which is the one thing reconciliation cannot recover |
-| Favorite Callers        | opposite of block callers. Mark numbers to have priority in the queue or be able to add a name to appear by it                                                                                    |
+| Block / favorite callers | A list of phone numbers. Blocked numbers are turned away before they reach the queue. Favorites can have a name shown next to them and jump ahead in the queue. |
+| Persistent call history | History is kept in memory, capped at `CALL_HISTORY_SIZE`, and cleared on restart. A database would also keep each caller's transcript through a restart, which is the one thing the app can't currently recover. |
+| VoIP call-ins | Let listeners call from a browser or app instead of dialing a phone number. Twilio charges less per minute for these calls than for calls over the phone network, and holding is most of the bill. |
+| HD audio | Phone-network audio is narrowband. A caller who comes in over VoIP could reach the studio in wideband audio, but only if the studio end is VoIP too (a browser or SIP client instead of a phone). Depends on VoIP call-ins. |

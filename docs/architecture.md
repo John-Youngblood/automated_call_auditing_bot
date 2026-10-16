@@ -35,6 +35,29 @@ frontend/src/
   types/events.ts        mirrors backend/app/schemas/
 ```
 
+## Reading the code
+
+Start at `backend/app/api/routes/webhooks.py` — the whole call flow is four
+handlers, in order:
+
+| Endpoint | Returns | Caller hears |
+|---|---|---|
+| `incoming-call` | `<Gather>` with the greeting inside | the greeting, then silence while Twilio listens |
+| `speech-result` | `<Enqueue>` | hold music |
+| `queue-exit` | empty | *(they left the queue)* |
+| `dial-complete` | `<Hangup>` | *(their time with the host ended)* |
+
+Then:
+
+- `telephony/twiml.py` — the XML documents, one function each
+- `services/call_registry.py` — the single writer of call state
+- `services/decisions.py` — accept and reject
+- `frontend/src/hooks/useCallStream.ts` — one socket, one reducer
+
+**One rule explains most of the design:** the dashboard must never claim
+something the phone line didn't do. Twilio acts first, local state follows, and
+a command that fails leaves the call visible rather than quietly resolved.
+
 ## The call flow, and why it is shaped that way
 
 Four details are load-bearing and easy to undo by accident:
