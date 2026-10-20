@@ -14,6 +14,7 @@ from app.telephony.twiml import (
     hold,
     hold_music,
     leave_queue,
+    reject,
     speak_and_hangup,
 )
 
@@ -26,5 +27,6 @@ __all__ = [
     "hold",
     "hold_music",
     "leave_queue",
+    "reject",
     "speak_and_hangup",
 ]

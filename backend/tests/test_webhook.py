@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from xml.etree.ElementTree import fromstring
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -366,7 +367,9 @@ class TestHoldMusic:
     def test_a_leading_slash_does_not_double_up(self, make_client, static_dir) -> None:
         (static_dir / "theme.mp3").touch()
         with make_client(HOLD_MUSIC_URL="/theme.mp3") as client:
-            assert hold_wait(client).findtext("Play") == "https://calls.example.test/static/theme.mp3"
+            assert (
+                hold_wait(client).findtext("Play") == "https://calls.example.test/static/theme.mp3"
+            )
 
     def test_a_listed_file_that_is_missing_gets_twilios_music(self, make_client) -> None:
         with make_client(HOLD_MUSIC_URL="not-there.mp3") as client:
@@ -489,3 +492,59 @@ class TestGreetingResolution:
             REJECT_AUDIO_URL="https://cdn.example.test/sorry.mp3",
         )
         assert get_settings().missing_audio_files() == ["GREETING_AUDIO_URL=gretting.mp3"]
+
+
+class TestTurnedAwayUnanswered:
+    """Callers the show cannot take are refused with <Reject>, before the
+    greeting, so Twilio never answers and never bills -- a flood costs
+    nothing. Closing the line is covered in test_line_state.py."""
+
+    def call_in(self, client: TestClient, sid: str, **extra: str):
+        return client.post("/webhook/incoming-call", data={**TWILIO_FORM, "CallSid": sid, **extra})
+
+    def test_a_full_queue_gives_a_busy_signal(self, make_client) -> None:
+        with make_client(HOLD_QUEUE_MAX_SIZE="2") as client:
+            self.call_in(client, "CA-1")
+            self.call_in(client, "CA-2")
+
+            doc = fromstring(self.call_in(client, "CA-3").text)
+
+            assert [child.tag for child in doc] == ["Reject"]
+            assert doc.find("Reject").attrib["reason"] == "busy"
+            assert [c["callId"] for c in client.get("/api/calls").json()] == ["CA-1", "CA-2"]
+
+    def test_a_place_frees_up_when_someone_leaves(self, make_client) -> None:
+        with make_client(HOLD_QUEUE_MAX_SIZE="1") as client:
+            self.call_in(client, "CA-1")
+            client.post("/webhook/call-status", data={"CallSid": "CA-1", "CallStatus": "completed"})
+
+            doc = fromstring(self.call_in(client, "CA-2").text)
+
+            assert doc.find("Gather") is not None
+
+    @pytest.mark.parametrize(
+        "verstat",
+        ["TN-Validation-Failed-A", "TN-Validation-Failed", "TN-Validation-Failed-B-Diverted"],
+    )
+    def test_a_spoofed_caller_id_is_refused(self, client: TestClient, verstat: str) -> None:
+        doc = fromstring(self.call_in(client, "CA-spoof", StirVerstat=verstat).text)
+
+        assert [child.tag for child in doc] == ["Reject"]
+        assert doc.find("Reject").attrib["reason"] == "rejected"
+        assert client.get("/api/calls").json() == []
+
+    @pytest.mark.parametrize("verstat", ["TN-Validation-Passed-A", "No-TN-Validation", "NULL"])
+    def test_anything_short_of_a_failed_check_gets_through(
+        self, client: TestClient, verstat: str
+    ) -> None:
+        """A false positive turns a real listener away with no way to tell
+        us, so only an outright failed verification is refused."""
+        doc = fromstring(self.call_in(client, "CA-ok", StirVerstat=verstat).text)
+
+        assert doc.find("Gather") is not None
+
+    def test_the_caller_id_check_can_be_switched_off(self, make_client) -> None:
+        with make_client(REJECT_FAILED_CALLER_ID="false") as client:
+            response = self.call_in(client, "CA-spoof", StirVerstat="TN-Validation-Failed-A")
+
+        assert fromstring(response.text).find("Gather") is not None

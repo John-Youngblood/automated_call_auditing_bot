@@ -6,6 +6,7 @@
     leave_queue()        take them out of the queue (their hold ran too long)
     dial()               tell an accepted caller, then put them through to the host
     speak_and_hangup()   turn someone away with a reason
+    reject()             refuse a call without answering it, so it is not billed
     hang_up()            end a leg we have no further plans for
 
 Anything the caller hears goes through :func:`voice`: a recording if one is
@@ -20,6 +21,7 @@ See docs/architecture.md for why the call flow is shaped this way.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 
@@ -175,6 +177,20 @@ def speak_and_hangup(*, audio_url: str = "", text: str = "", tts_voice: str) -> 
     response = Element("Response")
     voice(response, audio_url=audio_url, text=text, tts_voice=tts_voice)
     SubElement(response, "Hangup")
+    return _document(response)
+
+
+def reject(reason: Literal["busy", "rejected"]) -> RenderedResponse:
+    """Refuse the call without answering it.
+
+    The only TwiML Twilio does not bill for, and only as the first verb: it
+    never picks up. Which makes it the answer to a flood, where a spoken
+    goodbye would cost a billed minute per call. The caller hears a busy
+    signal, or for ``rejected`` a not-in-service message -- their carrier has
+    the final say.
+    """
+    response = Element("Response")
+    SubElement(response, "Reject", {"reason": reason})
     return _document(response)
 
 

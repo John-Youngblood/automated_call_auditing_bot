@@ -135,12 +135,32 @@ enqueued with, so the limit applies from their next call.
 (`services/hold_queue.py`), not in any TwiML. A size is a property of the
 queue, so it applies to everyone. The app creates the queue itself if it does
 not exist yet; leaving that to `<Enqueue>` would make it at Twilio's default
-of 1000 until the next restart. A caller who arrives when it is full gets
-`QueueResult=queue-full` and is dropped.
+of 1000 until the next restart.
 
 The size, not `MAX_HOLD_MINUTES`, is what bounds the cost of holding. If
 callers ring straight back after timing out, the queue stays full, so the
 bill is the queue size times the time the line is open.
+
+### Turning calls away for free
+
+`<Reject>` as the first verb is the one answer Twilio does not bill: the call
+is never picked up. `/webhook/incoming-call` uses it, before any greeting, for
+every caller the show cannot take:
+
+- **Line closed** — busy signal. This used to be a spoken message, which cost
+  a billed minute per call, so a flood between shows was the expensive case.
+- **Queue full** — busy signal. Judged from the app's own count of open calls
+  (still greeting, or holding), not from Twilio: asking would put a network
+  request in the webhook, and Twilio's own `queue-full` only arrives after the
+  greeting and speech recognition have been paid for. Callers mid-greeting
+  count because each is about to join the queue.
+- **Caller ID failed verification** (`StirVerstat` starting
+  `TN-Validation-Failed`) — not-in-service. Spoofed numbers are how floods are
+  placed. Twilio warns a failure can be its own certificate fetch, so
+  `REJECT_FAILED_CALLER_ID` turns this off.
+
+None of them are registered: a call that was never answered is not in the
+queue or history.
 
 ## Dependency direction
 

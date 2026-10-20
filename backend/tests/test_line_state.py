@@ -3,7 +3,7 @@
 Closing does two things, always: turns new callers away, and hangs up on
 anyone still holding. The service itself keeps running -- that is the
 distinction that matters, because an unreachable webhook makes Twilio play a
-caller a generic error, while a closed line tells them when to call back.
+caller a generic error, while a closed line gives them a busy signal.
 """
 
 from __future__ import annotations
@@ -18,19 +18,22 @@ from tests.conftest import patch_twilio
 
 INCOMING = {"CallSid": "CA-line-1", "From": "+15035551234", "To": "+15039990000"}
 
+
 def call_in(client: TestClient, call_sid: str = "CA-line-1"):
     return client.post("/webhook/incoming-call", data={**INCOMING, "CallSid": call_sid})
 
 
 class TestClosedLine:
-    def test_callers_are_told_why_rather_than_queued(self, client: TestClient) -> None:
+    def test_callers_get_a_busy_signal_and_are_not_billed(self, client: TestClient) -> None:
+        """Unanswered, so a flood of calls between shows costs nothing --
+        a spoken message here used to cost a billed minute per call."""
         client.post("/api/line/close")
 
         response = call_in(client)
 
         doc = fromstring(response.text)
-        assert [child.tag for child in doc] == ["Say", "Hangup"]
-        assert "not taking calls" in doc.find("Say").text
+        assert [child.tag for child in doc] == ["Reject"]
+        assert doc.find("Reject").attrib["reason"] == "busy"
         # Never screened, so never queued.
         assert client.get("/api/calls").json() == []
 
@@ -40,14 +43,6 @@ class TestClosedLine:
         call_in(client)
 
         assert client.get("/api/call-history").json() == []
-
-    def test_the_message_is_configurable(self, make_client) -> None:
-        client = make_client(CLOSED_LINE_MESSAGE="Back on Thursday.")
-        with client:
-            client.post("/api/line/close")
-            response = call_in(client)
-
-        assert fromstring(response.text).find("Say").text == "Back on Thursday."
 
     def test_closing_is_idempotent(self, client: TestClient) -> None:
         """Two operators clicking close a second apart must both succeed."""
@@ -167,4 +162,4 @@ class TestStartupState:
         with client:
             response = call_in(client)
 
-        assert fromstring(response.text).find("Say") is not None
+        assert fromstring(response.text).find("Reject") is not None

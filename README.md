@@ -179,11 +179,15 @@ and the hold music can be anything you like.
 | Hold music | `HOLD_MUSIC_URL` | *(Twilio's default playlist)* |
 | Accepted, before the studio phone rings | `ACCEPTED_AUDIO_URL` | `ACCEPTED_MESSAGE` |
 | Rejected, or held past `MAX_HOLD_MINUTES` | `REJECT_AUDIO_URL` | `REJECT_MESSAGE` |
-| Calling while the line is closed | `CLOSED_LINE_AUDIO_URL` | `CLOSED_LINE_MESSAGE` |
 | On hold when the line closes | `CLOSING_AUDIO_URL` | `CLOSING_MESSAGE` |
 
 An audio setting takes either a full `https://` URL or the bare filename of a
 file in `backend/app/static/` (e.g. `GREETING_AUDIO_URL=greeting.mp3`).
+
+Callers the show can't take hear nothing from you: anyone who calls while the
+line is closed or the hold queue is full gets a busy signal, and a caller whose
+caller ID fails Twilio's spoofing check hears "not in service". These calls are
+never answered, so Twilio doesn't bill them — a flood of calls costs nothing.
 
 ---
 

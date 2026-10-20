@@ -47,6 +47,7 @@ from app.telephony import (
     hold,
     hold_music,
     leave_queue,
+    reject,
     speak_and_hangup,
 )
 from app.telephony.signature import verify_twilio_signature
@@ -65,9 +66,15 @@ QUEUE_EXIT_PATH = "/webhook/queue-exit"
 #: hold-wait issues <Leave>, and the caller is still there to be told why.
 ABANDONED_QUEUE_RESULTS = frozenset({"hangup", "error", "system-error", "queue-full"})
 
+#: Prefix of the StirVerstat values meaning the carrier signed the caller ID
+#: and Twilio could not verify it. Not "No-TN-Validation" (malformed signing
+#: data) or "NULL" (no attestation level): a false positive turns a listener
+#: away with no way to tell us, so the narrowest match wins.
+FAILED_CALLER_ID = "TN-Validation-Failed"
+
 #: "Nothing further" -- ends the call. Used wherever an action URL has been
 #: handed control of a leg we have no more plans for.
-_EMPTY_RESPONSE = '<?xml version="1.0" encoding="UTF-8"?><Response />' 
+_EMPTY_RESPONSE = '<?xml version="1.0" encoding="UTF-8"?><Response />'
 
 
 async def _form(request: Request) -> dict[str, str]:
@@ -143,17 +150,24 @@ async def incoming_call(
         ),
     )
 
-    # Off air. Deliberately not registered: a caller who was never screened
-    # does not belong in the queue or in history.
+    # Turned away unanswered, so these cost nothing -- a flood of calls the
+    # show cannot take should not run up the bill. Deliberately not
+    # registered: a caller who was never screened does not belong in the
+    # queue or in history.
+    verstat = params.get("StirVerstat", "")
+    if settings.reject_failed_caller_id and verstat.startswith(FAILED_CALLER_ID):
+        logger.info("caller ID failed verification (%s), rejecting call_id=%s", verstat, call_id)
+        return _twiml(reject("rejected"))
     if not line.is_open:
         logger.info("line closed, turning away call_id=%s from=%s", call_id, caller.number)
-        return _twiml(
-            speak_and_hangup(
-                audio_url=settings.resolved_closed_line_audio_url,
-                text=settings.closed_line_message,
-                tts_voice=settings.tts_voice,
-            )
-        )
+        return _twiml(reject("busy"))
+    # Counts callers still hearing the greeting too: each of them is about to
+    # join the queue. Checked here, before answering, because Twilio's own
+    # queue-full only comes after the greeting and speech recognition -- a
+    # billed minute and a transcription for a caller who never gets in.
+    if len(registry.open_calls()) >= settings.hold_queue_max_size:
+        logger.info("hold queue full, turning away call_id=%s", call_id)
+        return _twiml(reject("busy"))
 
     registry.register_incoming(call_id, caller=caller, to_number=params.get("To"))
     logger.info("call screening call_id=%s from=%s", call_id, caller.number)
@@ -378,4 +392,3 @@ async def call_status(request: Request, registry: RegistryDep) -> Response:
     if call_id and state in TERMINAL_CALL_STATUSES:
         registry.end(call_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

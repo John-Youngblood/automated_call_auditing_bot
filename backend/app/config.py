@@ -67,12 +67,6 @@ class Settings(BaseSettings):
         "Please do try us again on the next show."
     )
 
-    closed_line_audio_url: str = ""
-    closed_line_message: str = (
-        "Thanks for calling. We are not taking calls right now. "
-        "Please try again during the next live show."
-    )
-
     closing_audio_url: str = ""
     closing_message: str = (
         "Thanks for calling. The show has ended for tonight, so we are closing the line. "
@@ -96,6 +90,12 @@ class Settings(BaseSettings):
     #: the queue at startup (see services/hold_queue.py). 1000 is Twilio's own
     #: default for a new queue, 5000 its ceiling; 200 keeps the bill in check.
     hold_queue_max_size: int = Field(default=200, ge=1, le=5000)
+
+    #: Refuse calls whose caller ID the carrier signed but Twilio could not
+    #: verify (StirVerstat ``TN-Validation-Failed*``) -- usually spoofed, the
+    #: way floods are placed. Twilio warns it can also mean a certificate it
+    #: failed to fetch, so this can turn away a real listener; hence a switch.
+    reject_failed_caller_id: bool = True
 
     #: Longest a caller may hold before hearing the reject message and being
     #: hung up. 0 disables it, leaving only Twilio's own 4-hour cap on any call.
@@ -197,7 +197,6 @@ class Settings(BaseSettings):
             "HOLD_MUSIC_URL": self.hold_music_url,
             "ACCEPTED_AUDIO_URL": self.accepted_audio_url,
             "REJECT_AUDIO_URL": self.reject_audio_url,
-            "CLOSED_LINE_AUDIO_URL": self.closed_line_audio_url,
             "CLOSING_AUDIO_URL": self.closing_audio_url,
         }
         return [f"{k}={v}" for k, v in audio.items() if v.strip() and not self._audio_url(v)]
@@ -225,10 +224,6 @@ class Settings(BaseSettings):
     @property
     def resolved_reject_audio_url(self) -> str:
         return self._audio_url(self.reject_audio_url)
-
-    @property
-    def resolved_closed_line_audio_url(self) -> str:
-        return self._audio_url(self.closed_line_audio_url)
 
     @property
     def resolved_closing_audio_url(self) -> str:
