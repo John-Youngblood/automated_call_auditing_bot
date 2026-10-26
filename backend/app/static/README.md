@@ -4,7 +4,7 @@ Everything here is served at `/static/`, and anything a caller hears can be
 pointed at by **filename** rather than a full URL:
 
     GREETING_AUDIO_URL=greeting.mp3
-    HOLD_MUSIC_URL=h3_podcast_theme.mp3
+    HOLD_MUSIC_URL=hold_music.mp3
 
 A filename that isn't in this folder is ignored and the prompt's text is
 spoken instead — the app logs a warning at startup naming it.

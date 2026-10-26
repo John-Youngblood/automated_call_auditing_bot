@@ -375,11 +375,11 @@ class TestHoldMusic:
     def test_a_bare_filename_is_served_from_this_backend(self, make_client, static_dir) -> None:
         """The form that survives a rotating tunnel: .env cannot interpolate
         PUBLIC_BASE_URL, so a filename is rebuilt against the current base."""
-        (static_dir / "h3_podcast_theme.mp3").touch()
-        with make_client(HOLD_MUSIC_URL="h3_podcast_theme.mp3") as client:
+        (static_dir / "hold_music.mp3").touch()
+        with make_client(HOLD_MUSIC_URL="hold_music.mp3") as client:
             assert (
                 hold_wait(client).findtext("Play")
-                == "https://calls.example.test/static/h3_podcast_theme.mp3"
+                == "https://calls.example.test/static/hold_music.mp3"
             )
 
     def test_a_leading_slash_does_not_double_up(self, make_client, static_dir) -> None:

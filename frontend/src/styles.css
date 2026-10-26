@@ -1,60 +1,58 @@
 /* Design tokens. Light palette on :root, dark applied via prefers-color-scheme
    so the dashboard is readable in a dim studio without a theme toggle.
 
-   Drawn from the show's logo: sky blue #7ED9F8, orchid #D06DFE, magenta
-   #B137C8 and a muted deep purple #734EAB. Those four drive the accent, the
-   header gradient and a purple cast through the neutrals.
+   Navy into cobalt, the same two colours as public/logo.svg. They drive the
+   accent, the header gradient and a cool slate cast through the neutrals.
 
    Accept/Reject/status colours deliberately stay green, red and amber. They
    are read under time pressure by someone deciding whether to put a stranger
-   on air, and semantics beat brand consistency every time there. */
+   on air, and semantics beat brand consistency every time there -- which is
+   also why the accent is blue: it stays clear of all three. */
 :root {
-  --bg: #f5f3f9;
+  --bg: #f3f5f8;
   --surface: #ffffff;
-  --surface-alt: #faf8fd;
-  --border: #e5dff0;
-  --text: #1a1524;
-  --text-muted: #6b6280;
-  /* A shade deeper than the logo's #B137C8 so it clears 4.5:1 on both white
-     and --accent-soft; the pills it colours are small text. */
-  --accent: #a32fba;
-  --accent-soft: #f8eafd;
+  --surface-alt: #f8fafc;
+  --border: #dde3ec;
+  --text: #111827;
+  --text-muted: #5b6577;
+  /* Clears 4.5:1 on both white and --accent-soft; the pills it colours are
+     small text. */
+  --accent: #1d4ed8;
+  --accent-soft: #e8effd;
   --success: #17803d;
   --success-soft: #e6f5ec;
   --danger: #c0272d;
   --danger-soft: #fdecec;
   --warning: #9a6200;
   --warning-soft: #fdf3e2;
-  /* The logo's palette, run right-to-left relative to the logo itself. The
-     sky blue is too light to carry white type, and the brand name sits on the
-     left -- so the saturated end goes under the text and the blue fades in
-     over the empty middle. Every stop left of centre clears 4.5:1 on white.
+  /* Darkest under the brand name on the left, brightening over the empty
+     middle. Every stop clears 4.5:1 against white type.
 
      Defined as bare stops so the header and the mirrored footer are built
      from one list: 287deg is 107 + 180, which is the same ramp run backwards.
      Redefining the stops per theme below is enough -- custom properties
      substitute at use time, so both gradients follow. */
-  --brand-stops: #9b2fb8 0%, #b137c8 24%, #a259e0 54%, #8fb8ee 82%, #7ed9f8 100%;
+  --brand-stops: #0f1e3d 0%, #142b57 30%, #1b4296 68%, #2563eb 100%;
   --brand-gradient: linear-gradient(107deg, var(--brand-stops));
   --brand-gradient-reverse: linear-gradient(287deg, var(--brand-stops));
   --radius: 10px;
   /* Referenced by the toast stack so it clears the footer bar. Keep the two
      in step: a toast sitting under the controls is a toast nobody reads. */
   --footer-height: 52px;
-  --shadow: 0 1px 2px rgb(26 21 36 / 6%), 0 1px 3px rgb(26 21 36 / 8%);
+  --shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 1px 3px rgb(15 23 42 / 8%);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121018;
-    --surface: #1b1724;
-    --surface-alt: #241f30;
-    --border: #342d44;
-    --text: #ece8f4;
-    --text-muted: #a297b8;
-    --accent: #d06dfe;
-    --accent-soft: #2c1c3d;
+    --bg: #0e1117;
+    --surface: #161b24;
+    --surface-alt: #1e2532;
+    --border: #2b3444;
+    --text: #e6eaf2;
+    --text-muted: #9aa5b8;
+    --accent: #7aa7ff;
+    --accent-soft: #18233a;
     --success: #4ecb79;
     --success-soft: #16251c;
     --danger: #ff7a7a;
@@ -64,7 +62,7 @@
     /* Same hues and the same direction, dropped in luminance. The light
        gradient at full strength glares against a dark body and pulls the eye
        off the queue. Only the stops are restated; both gradients follow. */
-    --brand-stops: #6e1f84 0%, #7c2790 24%, #6f3d9e 54%, #3f6f96 82%, #3f93b4 100%;
+    --brand-stops: #0a1428 0%, #0f1f3f 30%, #15326a 68%, #1c4594 100%;
     --shadow: 0 1px 2px rgb(0 0 0 / 40%);
   }
 }
@@ -117,14 +115,9 @@ h2 {
   min-width: 0;
 }
 
-/* The logo is a full-bleed gradient square sitting on a gradient header, so
-   without a hairline ring the two bleed into each other and the mark loses
-   its edge. Sized in CSS, not on the element: the source is 900x900.
-
-   44px, not the 36px a favicon-sized mark would take: this is a full lockup
-   ("THE H3 PODCAST"), and below about 40 the H3 stops resolving and it reads
-   as a coloured blob. The smaller type in it is decorative at any size the
-   header can afford -- same as the avatar on the channel page. */
+/* The mark is a gradient square sitting on a gradient header in the same
+   colours, so without a hairline ring the two bleed into each other and the
+   mark loses its edge. Sized in CSS, not on the element: it is an SVG. */
 .app__logo {
   width: 44px;
   height: 44px;
@@ -250,11 +243,9 @@ h2 {
   border-top: 1px solid rgb(0 0 0 / 14%);
 }
 
-/* A dark scrim, not the header tabs' translucent white. Mirroring the
-   gradient put the controls over the sky-blue end, where white on a white
-   scrim is about 1.6:1 -- invisible. 45% black is what it takes to clear
-   4.5:1 against the palest stop, and it holds along the whole ramp, so the
-   controls read the same wherever the bar is resized to. */
+/* A dark scrim, not the header tabs' translucent white, so the controls
+   clear 4.5:1 along the whole reversed ramp and read the same wherever the
+   bar is resized to. */
 .app__footer .button--ghost,
 .app__footer .line-state {
   color: #fff;
@@ -267,7 +258,7 @@ h2 {
 }
 
 /* Far right of the footer, which is the *dark* end of the reversed gradient
-   (#9b2fb8, ~6:1 against white), so this needs no scrim the way the controls
+   (#0f1e3d, far past 4.5:1 against white), so this needs no scrim the way the controls
    over the pale end do. 85% white lands near 4.7:1 and reads as secondary
    without dropping below AA. */
 .app__version {
@@ -880,7 +871,7 @@ h2 {
   box-shadow: var(--shadow);
 }
 
-/* White, not --accent: a purple ring on a purple gradient is not a ring. */
+/* White, not --accent: a blue ring on a blue gradient is not a ring. */
 .tab:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 1px;
@@ -1272,7 +1263,7 @@ button.chip {
   text-align: center;
   background: var(--surface);
   border-radius: var(--radius);
-  box-shadow: 0 14px 40px rgb(26 21 36 / 28%);
+  box-shadow: 0 14px 40px rgb(15 23 42 / 28%);
 }
 
 .login__logo {
@@ -1373,7 +1364,7 @@ button.chip {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius);
-  box-shadow: 0 6px 20px rgb(26 21 36 / 16%);
+  box-shadow: 0 6px 20px rgb(15 23 42 / 16%);
   pointer-events: auto;
   animation: toast-in 0.18s ease-out;
 }
@@ -1439,11 +1430,11 @@ button.chip {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 12px 32px rgb(26 21 36 / 22%);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 22%);
 }
 
 .dialog::backdrop {
-  background: rgb(26 21 36 / 45%);
+  background: rgb(15 23 42 / 45%);
 }
 
 .dialog__body {
@@ -1583,7 +1574,7 @@ button.chip {
 }
 
 /* A brighter green than --success, which is tuned for white backgrounds and
-   goes muddy against purple. */
+   goes muddy against navy. */
 .line-state--open .line-state__dot {
   background: #46d17e;
   opacity: 1;

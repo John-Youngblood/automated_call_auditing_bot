@@ -1,8 +1,6 @@
-# H3 Call Screener
+# Call Screener
 
-![h3_logo.png](frontend/public/h3_logo.png)
-
-A call-in queue for the H3 live podcast. Callers say why they're calling and
+A call-in queue for a live show. Callers say why they're calling and
 wait on hold. Whoever has the dashboard open decides who goes on air.
 
 ## Why

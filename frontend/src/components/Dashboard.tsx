@@ -84,9 +84,8 @@ export default function Dashboard({ onSignedOut }: Props) {
     <div className="app">
       <header className="app__header">
         <div className="app__brand">
-          {/* Named rather than decorative: the logo is the only place the show
-              itself is identified in the UI, so alt="" would drop that. */}
-          <img className="app__logo" src="/h3_logo.png" alt="The H3 Podcast" />
+          {/* Decorative: the wordmark beside it says everything the mark does. */}
+          <img className="app__logo" src="/logo.svg" alt="" />
           <h1>Call Screener</h1>
 
           {/* Beside the wordmark because it is the one thing an operator reads

@@ -34,7 +34,7 @@ export default function LoginScreen({ onSignedIn }: Props) {
   return (
     <div className="login">
       <form className="login__card" onSubmit={submit}>
-        <img className="login__logo" src="/h3_logo.png" alt="The H3 Podcast" />
+        <img className="login__logo" src="/logo.svg" alt="" />
         <h1 className="login__title">Call Screener</h1>
 
         <label className="login__label" htmlFor="password">
