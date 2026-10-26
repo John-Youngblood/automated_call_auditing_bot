@@ -8,7 +8,12 @@ would pin configuration for the whole session.
 Settings also read ../.env by default, which made the suite depend on whoever
 ran it. That is not theoretical: adding HOLD_MUSIC_URL to a local .env broke
 two assertions, and a TWILIO_ACCOUNT_SID in one sent the suite off to
-api.twilio.com for real. `isolate_dotenv` cuts that link for every test.
+api.twilio.com for real. `isolate_dotenv` cuts that link for every test --
+and the same for settings already in the environment, which is where
+`make test-container` puts the whole .env (compose's `env_file`).
+
+Every test gets its own database file, in WAL mode like the real one. Two apps
+built in one test share it, which is how test_restart.py simulates a restart.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings, get_settings
 from app.main import create_app
+from app.services.store import Store
 from app.telephony.rest import TwilioRestClient
 
 BASE_ENV = {
@@ -41,8 +47,12 @@ BASE_ENV = {
 
 @pytest.fixture(autouse=True)
 def isolate_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Build Settings from the environment only, never from a .env file."""
+    """Build Settings from what the tests set, never from a .env file or the
+    shell. A DASHBOARD_PASSWORD alone, which every real .env has, turns most
+    of the suite into 401s."""
     monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +66,23 @@ def static_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory.mkdir()
     monkeypatch.setattr("app.config.STATIC_DIR", directory)
     return directory
+
+
+@pytest.fixture(autouse=True)
+def database_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_dotenv: None) -> Path:
+    """A fresh database for every test, never the developer's own. After
+    ``isolate_dotenv``, which would clear it."""
+    path = tmp_path / "screener.db"
+    monkeypatch.setenv("DATABASE_PATH", str(path))
+    return path
+
+
+@pytest.fixture
+def store(database_path: Path) -> Iterator[Store]:
+    """For tests that build a CallRegistry themselves rather than an app."""
+    opened = Store.open(database_path)
+    yield opened
+    opened.close()
 
 
 @pytest.fixture

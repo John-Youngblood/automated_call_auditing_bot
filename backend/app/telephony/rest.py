@@ -65,6 +65,15 @@ class CallDetails:
     status: str
 
 
+class QueueUnknown(RuntimeError):
+    """Twilio could not say who is in the hold queue.
+
+    Raised, not returned as an empty answer, because the two mean opposite
+    things after a restart: no queue means nobody is holding, while no answer
+    means anyone might be -- and calls saved as open must stay that way.
+    """
+
+
 def _parse_rfc2822(value: str | None) -> datetime | None:
     """Twilio timestamps are RFC 2822 (``Tue, 21 Sep 2026 20:14:02 +0000``)."""
     if not value:
@@ -154,11 +163,12 @@ class TwilioRestClient:
 
         ``<Enqueue>`` creates queues on demand by name, so the SID is not known
         anywhere in this codebase until we ask. A missing queue is the normal
-        case on a cold account and not an error.
+        case on a cold account and not an error; Twilio not answering is
+        :class:`QueueUnknown`.
         """
         queues = await self._list_queues()
         if queues is None:
-            return None
+            raise QueueUnknown("could not list the account's queues")
         queue = _named(queues, friendly_name)
         if queue is None:
             logger.info("no Twilio queue named %r yet", friendly_name)
@@ -195,7 +205,12 @@ class TwilioRestClient:
         return await self._request("POST", path, {**data, "MaxSize": str(max_size)}) is not None
 
     async def list_queue_members(self, queue_sid: str) -> list[QueueMember]:
-        """Everyone currently waiting in the queue, following pagination."""
+        """Everyone currently waiting in the queue, following pagination.
+
+        All or nothing: a page that fails raises :class:`QueueUnknown` rather
+        than returning the rest, whose saved calls would then be closed while
+        those callers still held.
+        """
         members: list[QueueMember] = []
         path: str | None = f"/Queues/{queue_sid}/Members.json?PageSize=50"
 
@@ -204,7 +219,7 @@ class TwilioRestClient:
                 break
             payload = await self._get(path)
             if payload is None:
-                break
+                raise QueueUnknown("could not list who is in the hold queue")
             for row in payload.get("queue_members") or []:
                 call_sid = row.get("call_sid")
                 if not call_sid:
@@ -227,8 +242,8 @@ class TwilioRestClient:
 
         Note what is *not* here: ``FromCity``/``FromState``/``FromCountry``.
         Those are webhook parameters, not fields on the Call resource, so a
-        recovered call has no location label. Nothing to do about it -- Twilio
-        does not keep them.
+        recovered call's location label comes from its saved row, if any --
+        Twilio does not keep them.
         """
         payload = await self._get(f"/Calls/{call_sid}.json")
         if payload is None:

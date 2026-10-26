@@ -122,6 +122,84 @@ account Docker Desktop runs under.
 
 ---
 
+## Updating
+
+Between shows, with the line closed.
+
+1. Open Terminal and go to the screener's folder (wherever it was set up):
+
+   ```bash
+   cd automated_call_auditing_bot
+   ```
+
+2. Get the new version:
+
+   ```bash
+   git pull
+   ```
+
+3. Rebuild and restart it. This takes a few minutes, and ends by printing the
+   dashboard addresses:
+
+   ```bash
+   make office
+   ```
+
+4. Reload the dashboard in every browser that has it open, and sign in again.
+
+5. Check it worked: the version at the bottom right of the dashboard is the
+   new one, and **Call History** says *Saved on this machine* under its title.
+
+If a step prints an error, stop and send the developer what it printed. The
+screener keeps running the version it had.
+
+Restarting from Docker Desktop is not an update: it starts the same version
+again.
+
+Call history and contacts are kept on this machine. Reboots, updates,
+restarting Docker Desktop and `make office-down` all leave them alone. **Never
+run `docker compose down -v` or Docker Desktop's *Clean / Purge data*:** either
+one deletes every saved call and contact, for good.
+
+A red banner at the top saying call history and contacts aren't being saved
+means something went wrong. See
+[When something is wrong](#when-something-is-wrong).
+
+---
+
+## Backing up
+
+Saved calls and contacts exist only on this machine. To copy them out:
+
+```bash
+make office-backup
+```
+
+It works while the screener is running, mid-show included, and says where the
+copy went: `Saved backups/screener-2026-10-22-231500.db`. Copy the `backups`
+folder somewhere off the machine. The copies hold callers' numbers and what
+they said, and unlike the live data their old transcripts are never cleared,
+so look after them.
+
+To restore one, between shows (it replaces everything saved since):
+
+```bash
+docker compose -f docker-compose.office.yml stop backend
+docker compose -f docker-compose.office.yml run --rm --no-deps \
+  -v "$PWD/backups:/backups:ro" backend \
+  sh -c 'cp /backups/screener-2026-10-22-231500.db /srv/data/screener.db &&
+         rm -f /srv/data/screener.db-wal /srv/data/screener.db-shm'
+docker compose -f docker-compose.office.yml start backend
+```
+
+The backend must be stopped, or it goes on writing to the file being replaced.
+The `-wal` and `-shm` files belong to the old database, and SQLite would replay
+them into the restored one. Copying from inside a container keeps the file
+owned by the user the backend runs as; `docker compose cp` would leave it
+owned by root, and the backend would come up showing the storage banner.
+
+---
+
 ## What this differs from `make up`
 
 `make up` is the development stack: source bind-mounted, Vite dev server,
@@ -143,8 +221,9 @@ sleeps, calls stop being answered.
   set Energy → **Prevent automatic sleeping when the display is off**.
 - **Windows**: Settings → Power → Sleep → **Never** on mains power.
 
-A reboot is survivable — the containers restart and the backend asks Twilio who
-is still holding — but sleep mid-show is not, because nothing is listening.
+A reboot is survivable — the containers restart, the backend asks Twilio who is
+still holding, and puts them back with what they said — but sleep mid-show is
+not, because nothing is listening.
 
 ---
 
@@ -164,6 +243,22 @@ restarted and forgot every session — tokens are in memory. Sign in again.
 footer says `LINE OPEN`). `LINE_OPEN_ON_START=true` means a restart comes back
 open, so this usually means someone closed it.
 
+**A red banner: "Call history and contacts aren't being saved"** (or "stopped
+saving"). Calls are still screened, and Accept and Reject still work, so the
+show can go on. But nothing is saved, and blocked numbers may ring through:
+reject them by hand. To fix it, restart the backend, in Docker Desktop
+(Containers → call-screener → backend → Restart) or with:
+
+```bash
+docker compose -f docker-compose.office.yml restart backend
+```
+
+Callers on hold come back on their own; everyone signs in again. If the banner
+comes back, `make office-logs` says why, on a line with `cannot use the
+database` or `could not` in it. *disk is full* means free some space and
+restart again. Anything else, tell the developer, and don't delete the volume
+to start fresh.
+
 ---
 
 ## What it does not give you
@@ -172,5 +267,6 @@ open, so this usually means someone closed it.
   clear. Fine on a trusted office network, not fine over shared Wi-Fi with
   guests on it. The password goes over that connection.
 - **The dashboard is only as available as the machine.** No failover.
-- **State still dies with the process.** A restart is recoverable because the
-  queue is rebuilt from Twilio, but transcripts are not. See the main README.
+- **The data has one home.** Call history, contacts and transcripts survive
+  restarts and reboots, but not the machine itself failing. Run
+  `make office-backup` now and then.

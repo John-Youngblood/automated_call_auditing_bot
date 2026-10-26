@@ -15,3 +15,5 @@
 .env.*
 !.env.example
 .tunnel-url
+backend/data/
+backups/

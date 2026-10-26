@@ -9,7 +9,11 @@
 
 The flow:
 
-    ring ──▶ <Gather input="speech"> greeting plays, Twilio listens
+    ring ──▶ spoofed, blocked, line closed, queue full? ──▶ <Reject>, unanswered
+              │
+              │  none of those
+              ▼
+         <Gather input="speech"> greeting plays, Twilio listens
               │
               │  caller stops talking; Twilio detects it and posts the text
               ▼
@@ -20,7 +24,8 @@ The flow:
                    and /webhook/hold-wait ends the hold past MAX_HOLD_MINUTES
 
 Twilio owns the hard part -- deciding when the caller stopped speaking -- so
-there is no audio streaming anywhere in this service.
+there is no audio streaming anywhere in this service. Every call that gets as
+far as the greeting is saved, transcript included (app/services/store.py).
 
 Keep these handlers fast: Twilio times out and plays the caller an error.
 """
@@ -35,10 +40,10 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from app.api.deps import LineDep, RegistryDep, SettingsDep
+from app.api.deps import LineDep, RegistryDep, SettingsDep, StoreDep
 from app.schemas.calls import Caller
 from app.services.decisions import DIAL_COMPLETE_PATH
-from app.services.phone import format_location
+from app.services.phone import caller_number, format_location
 from app.telephony import (
     TWILIO_HOLD_MUSIC,
     RenderedResponse,
@@ -71,6 +76,10 @@ ABANDONED_QUEUE_RESULTS = frozenset({"hangup", "error", "system-error", "queue-f
 #: data) or "NULL" (no attestation level): a false positive turns a listener
 #: away with no way to tell us, so the narrowest match wins.
 FAILED_CALLER_ID = "TN-Validation-Failed"
+
+#: The one StirVerstat meaning the carrier vouched for the caller's right to
+#: the number. B and C attest only to the customer or the call's origin.
+VERIFIED_CALLER_ID = "TN-Validation-Passed-A"
 
 #: "Nothing further" -- ends the call. Used wherever an action URL has been
 #: handed control of a leg we have no more plans for.
@@ -115,6 +124,25 @@ def _twiml(rendered) -> Response:
     return Response(content=rendered.body, media_type=rendered.media_type)
 
 
+def _caller(params: dict[str, str]) -> Caller:
+    """Who is calling, from the parameters Twilio sends with every request
+    about a call -- so a speech result can rebuild a caller it never saw ring.
+    """
+    return Caller(
+        number=caller_number(params.get("From")),
+        # Only sent when Caller ID Lookup is enabled on the number (paid, off
+        # by default), so usually None.
+        name=params.get("CallerName") or None,
+        # Where the *number* is registered, not the caller -- see phone.py.
+        location=format_location(
+            params.get("FromCity"),
+            params.get("FromState"),
+            params.get("FromCountry"),
+        ),
+        verified=params.get("StirVerstat", "").startswith(VERIFIED_CALLER_ID),
+    )
+
+
 @router.post(
     "/webhook/incoming-call",
     summary="Answer a call, play the greeting, and listen for the caller's reason",
@@ -129,6 +157,7 @@ async def incoming_call(
     registry: RegistryDep,
     settings: SettingsDep,
     line: LineDep,
+    store: StoreDep,
 ) -> Response:
     params = await _form(request)
     _check_signature(request, params, settings)
@@ -136,19 +165,7 @@ async def incoming_call(
     # Twilio's own id, falling back to a generated one so a malformed payload
     # still produces a traceable call rather than a 500.
     call_id = params.get("CallSid") or f"local-{uuid.uuid4().hex[:12]}"
-    number = params.get("From") or None
-    caller = Caller(
-        number=number,
-        # Only sent when Caller ID Lookup is enabled on the number (paid, off
-        # by default), so usually None.
-        name=params.get("CallerName") or None,
-        # Where the *number* is registered, not the caller -- see phone.py.
-        location=format_location(
-            params.get("FromCity"),
-            params.get("FromState"),
-            params.get("FromCountry"),
-        ),
-    )
+    caller = _caller(params)
 
     # Turned away unanswered, so these cost nothing -- a flood of calls the
     # show cannot take should not run up the bill. Deliberately not
@@ -157,6 +174,17 @@ async def incoming_call(
     verstat = params.get("StirVerstat", "")
     if settings.reject_failed_caller_id and verstat.startswith(FAILED_CALLER_ID):
         logger.info("caller ID failed verification (%s), rejecting call_id=%s", verstat, call_id)
+        return _twiml(reject("rejected"))
+    # A withheld number has no contact and no history: every withheld caller
+    # would otherwise be one person.
+    if caller.number:
+        caller.contact, caller.history = store.caller_profile(caller.number, exclude_sid=call_id)
+    # Before the line and queue checks, so a blocked number hears the same
+    # thing whatever the show is doing, and every attempt is counted.
+    if caller.contact and caller.contact.standing == "blocked":
+        if not store.note_blocked_attempt(caller.number):
+            registry.announce_storage_warning()
+        logger.info("blocked number, turning away call_id=%s from=%s", call_id, caller.number)
         return _twiml(reject("rejected"))
     if not line.is_open:
         logger.info("line closed, turning away call_id=%s from=%s", call_id, caller.number)
@@ -214,7 +242,9 @@ async def speech_result(
     if not text:
         logger.info("no speech detected call_id=%s", call_id)
 
-    registry.set_transcript(call_id, text, confidence)
+    # No CallSid, nothing to attach the words to -- and nothing to revive.
+    if call_id:
+        registry.set_transcript(call_id, text, confidence, caller=_caller(params))
 
     # Hold them. The call stays open until an operator accepts or rejects,
     # the caller hangs up, or they reach MAX_HOLD_MINUTES.
@@ -377,7 +407,11 @@ TERMINAL_CALL_STATUSES = frozenset({"completed", "busy", "failed", "no-answer", 
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
 )
-async def call_status(request: Request, registry: RegistryDep) -> Response:
+async def call_status(
+    request: Request,
+    registry: RegistryDep,
+    settings: SettingsDep,
+) -> Response:
     """Terminal call events.
 
     Configured per number in the Twilio console ("Call status changes"), and
@@ -387,6 +421,10 @@ async def call_status(request: Request, registry: RegistryDep) -> Response:
     wants 204 or empty TwiML. A JSON body logs a Debugger warning per call.
     """
     params = await _form(request)
+    # Ends calls in saved history, so it is checked like the others: an
+    # unsigned post here could close a caller's call while they still hold.
+    _check_signature(request, params, settings)
+
     call_id = params.get("CallSid")
     state = params.get("CallStatus", "unknown")
     if call_id and state in TERMINAL_CALL_STATUSES:

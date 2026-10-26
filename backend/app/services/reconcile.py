@@ -1,14 +1,20 @@
 """Rebuilding the queue from Twilio after a restart.
 
-Call state lives only in this process; callers on hold live in a Twilio queue,
-which does not. A restart strands them: Twilio keeps playing hold music to
+Calls in play live in this process; callers on hold live in a Twilio queue,
+which outlives it. A restart strands them: Twilio keeps playing hold music to
 people no operator can see, and nothing ever fires to say they are there.
 
-Twilio gives back the call SID, number, caller-ID name and start time. It does
-not give back **the transcript** or the city/state labels -- those arrive as
-webhook parameters and are not kept on the Call resource. ``Call.recovered``
-marks the difference so the dashboard does not show what looks like a caller
+Twilio gives back who is still holding: the call SID, number, caller-ID name
+and start time. It has never had **the transcript** or the city/state labels
+-- those arrived as webhook parameters -- so they come back from storage, from
+the row saved when the call rang (see CallRegistry.register_recovered).
+``Call.recovered`` marks a rebuilt call whose words were lost -- no saved row,
+or one saved before their speech result -- so it does not look like a caller
 who said nothing.
+
+Once this has run, every saved call still open that it did not restore ended
+while nobody was listening, and is closed as such (sweep_stale). Not if it
+failed: then nobody knows who is still holding.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import logging
 from app.config import Settings
 from app.schemas.calls import Caller
 from app.services.call_registry import CallRegistry
+from app.services.phone import caller_number
 from app.telephony.rest import (
     LIVE_CALL_STATUSES,
     CallDetails,
@@ -33,6 +40,7 @@ logger = logging.getLogger(__name__)
 #: to Twilio's rate limits while still finishing a full queue quickly.
 _LOOKUP_CONCURRENCY = 10
 
+
 async def reconcile_hold_queue(registry: CallRegistry, settings: Settings) -> int:
     """Put everyone Twilio still has on hold back on the dashboard.
 
@@ -41,12 +49,16 @@ async def reconcile_hold_queue(registry: CallRegistry, settings: Settings) -> in
     queue with a log line, not a service that will not start.
     """
     try:
-        return await _reconcile(registry, settings)
+        restored = await _reconcile(registry, settings)
     except asyncio.CancelledError:
         raise
     except Exception:
+        # No sweep: leaving saved calls open hides nothing, since history only
+        # lists finished calls, while closing them could close a live one.
         logger.exception("hold-queue reconciliation failed; starting with an empty queue")
         return 0
+    registry.sweep_stale()
+    return restored
 
 
 async def _reconcile(registry: CallRegistry, settings: Settings) -> int:
@@ -116,10 +128,10 @@ async def _fetch_all(
 
 def _restore(registry: CallRegistry, member: QueueMember, detail: CallDetails | None):
     caller = Caller(
-        number=detail.from_number if detail else None,
+        # Through the same gate as the webhook: Twilio's Call resource carries
+        # "anonymous" and friends just as From does.
+        number=caller_number(detail.from_number) if detail else None,
         name=detail.caller_name if detail else None,
-        # No location: FromCity/FromState/FromCountry are webhook-only.
-        location=None,
     )
     # Prefer the call's own start time over the enqueue time -- the caller has
     # been waiting since they dialled, through the greeting and the gather,

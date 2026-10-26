@@ -41,8 +41,8 @@ watching it all show. No AI decides who gets through. A person does.
 ```
 
 Twilio handles the audio, including detecting when the caller has finished
-talking, and sends the finished transcript in one webhook. Nothing is written
-to disk: live and recent calls are kept in memory.
+talking, and sends the finished transcript in one webhook. Call history and
+contacts are saved in SQLite on the machine running the app.
 
 ---
 
@@ -74,8 +74,15 @@ make simulate CALLS=3
 make simulate SAY="I have a question for your guest"
 ```
 
+```bash
+make simulate NUMBER=+15035550147   # run twice for a repeat caller
+```
+
 These send the same webhooks Twilio would, so the greeting, transcript and
-queue all work without a phone.
+queue all work without a phone. They are saved like real calls, so don't
+point them at the office stack. History and contacts are kept in a Docker
+volume (`backend/data/` without Docker), so they survive `make down`;
+`docker compose down -v` starts fresh.
 
 **Accept and Reject need Twilio.** They send real commands to Twilio, so
 without credentials they return `503`. Even with credentials, Twilio doesn't
@@ -185,9 +192,10 @@ An audio setting takes either a full `https://` URL or the bare filename of a
 file in `backend/app/static/` (e.g. `GREETING_AUDIO_URL=greeting.mp3`).
 
 Callers the show can't take hear nothing from you: anyone who calls while the
-line is closed or the hold queue is full gets a busy signal, and a caller whose
-caller ID fails Twilio's spoofing check hears "not in service". These calls are
-never answered, so Twilio doesn't bill them — a flood of calls costs nothing.
+line is closed or the hold queue is full gets a busy signal, and a blocked
+number or a caller whose caller ID fails Twilio's spoofing check hears "not in
+service". These calls are never answered, so Twilio doesn't bill them — a flood
+of calls costs nothing.
 
 ---
 
@@ -200,10 +208,18 @@ never answered, so Twilio doesn't bill them — a flood of calls costs nothing.
 - **Clear out the queue now and then.** Rejecting callers you won't get to
   saves money even when you aren't ready to take a call.
 - **Call History** lists finished calls, which ones made it on air, and for how
-  long. It's kept in memory, so it clears when the app restarts.
+  long, searchable by what callers said, a name or a number. It's saved on the
+  machine running the app, so restarts and updates keep it
+  (`make office-backup` copies it off). What callers said is cleared after 90
+  days (`TRANSCRIPT_RETENTION_DAYS`); the calls stay.
+- **Contacts** give a number a name, a note, a favorite star, or a block.
+  Callers in the queue show the name you saved and how often they've called,
+  been on air or been rejected before. A blocked number hears "not in service"
+  without ever reaching the queue, and blocking someone who's holding hangs up
+  on them too (never on a caller who's on air).
 - **Restarting is safe mid-show.** Callers still on hold come back on the
-  dashboard, but what they said can't be recovered, and the row says so.
-  A restart also signs everyone out of the dashboard.
+  dashboard with what they said. A restart also signs everyone out of the
+  dashboard.
 
 ---
 
@@ -229,6 +245,9 @@ Before you push, run the linter, the backend tests and the frontend typecheck:
 make check
 ```
 
+`make test-container` runs the backend tests in Docker, on the SQLite version
+the containers ship, which is older than a Mac's.
+
 `make help` lists everything else. [docs/architecture.md](docs/architecture.md)
 explains where to start reading the code and why it's built the way it is.
 
@@ -238,7 +257,5 @@ explains where to start reading the code and why it's built the way it is.
 
 | Feature | Description |
 |---|---|
-| Block / favorite callers | A list of phone numbers. Blocked numbers are turned away before they reach the queue. Favorites can have a name shown next to them and jump ahead in the queue. |
-| Persistent call history | History is kept in memory, capped at `CALL_HISTORY_SIZE`, and cleared on restart. A database would also keep each caller's transcript through a restart, which is the one thing the app can't currently recover. |
 | VoIP call-ins | Let listeners call from a browser or app instead of dialing a phone number. Twilio charges less per minute for these calls than for calls over the phone network, and holding is most of the bill. |
 | HD audio | Phone-network audio is narrowband. A caller who comes in over VoIP could reach the studio in wideband audio, but only if the studio end is VoIP too (a browser or SIP client instead of a phone). Depends on VoIP call-ins. |

@@ -42,7 +42,7 @@ class TestClosedLine:
         client.post("/api/line/close")
         call_in(client)
 
-        assert client.get("/api/call-history").json() == []
+        assert client.get("/api/call-history").json()["calls"] == []
 
     def test_closing_is_idempotent(self, client: TestClient) -> None:
         """Two operators clicking close a second apart must both succeed."""

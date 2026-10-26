@@ -1,6 +1,6 @@
 # Convenience wrappers. Everything here is a one-liner you can also run by hand.
 .DEFAULT_GOAL := help
-.PHONY: help up down logs build install test lint fmt check simulate office office-down office-logs tunnel url push-env clean
+.PHONY: help up down logs build install test test-container lint fmt check simulate office office-down office-logs office-backup tunnel url push-env clean
 
 BACKEND := backend
 FRONTEND := frontend
@@ -9,7 +9,7 @@ PY := $(VENV)/bin/python
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 up: ## Run the whole stack in Docker (dashboard :5173, api :8000)
 	docker compose up --build
@@ -32,6 +32,12 @@ install: ## Set up local (non-Docker) dev environments
 test: ## Run the backend test suite
 	cd $(BACKEND) && .venv/bin/python -m pytest
 
+# --build: without it `run` takes whatever image has the tag, which may be the
+# office's prod build (no pytest) or one from before the SQLite pin. No cache
+# provider: /srv belongs to root, so pytest could only warn that it can't write.
+test-container: ## Run the backend tests in Docker, on the SQLite version shows run
+	docker compose run --rm --build --no-deps backend python -m pytest -p no:cacheprovider
+
 lint: ## Lint backend and typecheck frontend
 	cd $(BACKEND) && .venv/bin/ruff check .
 	cd $(FRONTEND) && npm run typecheck
@@ -43,9 +49,9 @@ check: lint test ## Lint + test, what CI should run
 
 # SECONDS is deliberately absent: call duration mattered when audio was
 # streamed, but Twilio now decides when the caller stops talking.
-simulate: ## Place fake calls against a running backend (CALLS=3 SAY="...")
+simulate: ## Place fake calls against a running backend (CALLS=3 SAY="..." NUMBER=+1...)
 	$(PY) $(BACKEND)/scripts/simulate_call.py \
-		--calls $(or $(CALLS),1) $(if $(SAY),--say "$(SAY)",)
+		--calls $(or $(CALLS),1) $(if $(SAY),--say "$(SAY)",) $(if $(NUMBER),--number "$(NUMBER)",)
 
 office: ## Run the office stack (built images + tunnel) -- see docs/office.md
 	docker compose -f docker-compose.office.yml up -d --build
@@ -59,6 +65,18 @@ office-down: ## Stop the office stack
 
 office-logs: ## Tail the office stack
 	docker compose -f docker-compose.office.yml logs -f
+
+# VACUUM INTO makes a consistent copy while calls keep coming in. It is written
+# next to the database (the app user owns that directory), then copied out to
+# the host. mode=ro: a wrong path fails instead of backing up a new, empty file.
+office-backup: ## Copy call history and contacts to ./backups (office stack running)
+	@mkdir -p backups
+	docker compose -f docker-compose.office.yml exec -T backend python -c 'import os, sqlite3; \
+		os.path.exists("/srv/data/backup-tmp.db") and os.remove("/srv/data/backup-tmp.db"); \
+		sqlite3.connect("file:/srv/data/screener.db?mode=ro", uri=True).execute("VACUUM INTO ?", ("/srv/data/backup-tmp.db",))'
+	@file=backups/screener-$$(date +%Y-%m-%d-%H%M%S).db; \
+		docker compose -f docker-compose.office.yml cp backend:/srv/data/backup-tmp.db $$file && echo "Saved $$file"
+	docker compose -f docker-compose.office.yml exec -T backend rm /srv/data/backup-tmp.db
 
 tunnel: ## Open a throwaway public tunnel (dev; rotates on every restart)
 	./scripts/tunnel.sh

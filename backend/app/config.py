@@ -146,11 +146,17 @@ class Settings(BaseSettings):
     #: On boot, rebuild the queue from Twilio -- see services/reconcile.py.
     reconcile_on_startup: bool = True
 
-    # --- Dashboard ---------------------------------------------------------
-    #: Finished calls kept in memory, and the history endpoint's page size.
-    #: One number: serving more than is retained would be fiction.
-    call_history_size: int = Field(default=200, ge=1, le=1000)
+    # --- Storage -----------------------------------------------------------
+    #: What callers said is personal, so it goes; the calls themselves stay.
+    #: 0 keeps transcripts forever.
+    transcript_retention_days: int = Field(default=90, ge=0)
 
+    #: Beside the code, so /srv/data/screener.db in the containers (where the
+    #: volume mounts) and backend/data/screener.db on the host. Only tests
+    #: should set it.
+    database_path: Path = Path(__file__).resolve().parent.parent / "data" / "screener.db"
+
+    # --- Dashboard ---------------------------------------------------------
     #: Per-dashboard outbound buffer; overflow drops oldest.
     frontend_queue_max: int = Field(default=250, ge=1)
     cors_allow_origins: str = "http://localhost:5173"

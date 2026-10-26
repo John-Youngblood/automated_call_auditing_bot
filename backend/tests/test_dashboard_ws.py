@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from uvicorn.protocols.utils import ClientDisconnected
 
@@ -180,31 +181,38 @@ def test_accepted_call_leaves_the_live_queue(client: TestClient) -> None:
     assert client.get(f"/api/calls/{INCOMING['CallSid']}").json()["status"] == "accepted"
 
 
-def test_history_is_bounded_and_newest_first(make_client) -> None:
-    """The history cap is the only thing bounding memory: nothing else evicts,
-    so a long-running process would otherwise hold every call it ever saw."""
-    cap = 5
-    client = make_client(CALL_HISTORY_SIZE=str(cap))
-    with client:
-        for n in range(cap + 3):
-            call_id = f"CA-bulk-{n}"
-            client.post("/webhook/incoming-call", data={**INCOMING, "CallSid": call_id})
-            client.post(f"/api/calls/{call_id}/reject")
+def test_history_is_newest_first_and_paged(client: TestClient) -> None:
+    """Saved, not capped, so it comes a page at a time. ``next`` is the
+    cursor for the page after; the last page has none."""
+    for n in range(5):
+        call_id = f"CA-bulk-{n}"
+        client.post("/webhook/incoming-call", data={**INCOMING, "CallSid": call_id})
+        client.post(f"/api/calls/{call_id}/reject")
 
-        history = client.get("/api/call-history", params={"limit": 500}).json()
+    first = client.get("/api/call-history", params={"limit": 3}).json()
+    rest = client.get("/api/call-history", params={"limit": 3, "before": first["next"]}).json()
 
-    # Capped, newest first, and the overflow is gone rather than merely hidden.
-    assert [c["callId"] for c in history] == [f"CA-bulk-{n}" for n in range(7, 2, -1)]
-    assert client.get("/api/calls/CA-bulk-0").status_code == 404
+    assert [c["callId"] for c in first["calls"] + rest["calls"]] == [
+        f"CA-bulk-{n}" for n in range(4, -1, -1)
+    ]
+    assert rest["next"] is None
+
+
+@pytest.mark.parametrize("before", ["yesterday", "9" * 23 + ":CA1"])
+def test_a_malformed_cursor_is_refused(client: TestClient, before: str) -> None:
+    """Too many digits is malformed too: SQLite cannot hold the number."""
+    response = client.get("/api/call-history", params={"before": before})
+
+    assert response.status_code == 422
 
 
 def test_history_holds_only_finished_calls(client: TestClient) -> None:
     client.post("/webhook/incoming-call", data=INCOMING)
-    assert client.get("/api/call-history").json() == []
+    assert client.get("/api/call-history").json()["calls"] == []
 
     client.post(f"/api/calls/{INCOMING['CallSid']}/reject")
 
-    history = client.get("/api/call-history").json()
+    history = client.get("/api/call-history").json()["calls"]
     assert [c["callId"] for c in history] == [INCOMING["CallSid"]]
     assert history[0]["status"] == "rejected"
 

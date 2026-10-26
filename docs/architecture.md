@@ -13,15 +13,18 @@ backend/app/
     deps.py              app.state -> route dependencies
     routes/webhooks.py   the four Twilio webhooks, in call order
     routes/calls.py      accept / reject / history / line open+close
+    routes/contacts.py   name, note, favorite, block
     routes/frontend.py   WS /ws/frontend
   services/
-    call_registry.py     single writer of call state, live + recent
+    call_registry.py     single writer of call state; saves every change
+    store.py             SQLite: call history and contacts
+    migrations.py        the schema, append-only
     broadcaster.py       bounded-queue fan-out to dashboards
     decisions.py         accept and reject, carrier-first
     drain.py             hang up on holders when the line closes
     line_state.py        on air / off air, broadcast to dashboards
     reconcile.py         rebuild the queue from Twilio on boot
-    phone.py             caller location labels
+    phone.py             which numbers are real, location labels
   telephony/             everything Twilio-specific
     twiml.py             the five XML documents
     rest.py              the four REST endpoints we call
@@ -30,7 +33,7 @@ backend/app/
 
 frontend/src/
   hooks/useCallStream.ts one socket, one reducer
-  hooks/useCallHistory.ts history is a plain HTTP read
+  hooks/useCallHistory.ts history is a paged HTTP read
   components/            presentational only
   types/events.ts        mirrors backend/app/schemas/
 ```
@@ -158,6 +161,9 @@ every caller the show cannot take:
   `TN-Validation-Failed`) — not-in-service. Spoofed numbers are how floods are
   placed. Twilio warns a failure can be its own certificate fetch, so
   `REJECT_FAILED_CALLER_ID` turns this off.
+- **Blocked number** — not-in-service, and the contact's `blockedAttempts`
+  goes up. Checked before the line and the queue, so a blocked number hears
+  the same thing whatever the show is doing, and every attempt is counted.
 
 None of them are registered: a call that was never answered is not in the
 queue or history.
@@ -233,36 +239,38 @@ should jump to the present, not crawl through history.
 | --- | --- |
 | Caller says nothing | `actionOnEmptyResult` fires the webhook anyway; the call reaches the dashboard with an empty transcript rather than vanishing |
 | `<Gather>` falls through | Trailing `<Redirect>` sends the call to the same endpoint instead of off the end of the document, which would hang up on the caller |
-| Speech result for an unknown call | Logged and dropped; Twilio retries can outlive a call |
+| Speech result for an unknown call | Revived into the queue if it was never decided (the caller was mid-greeting through a restart); logged and dropped if its saved row is decided or ended |
 | Caller hangs up while on hold | Status callback ends the call and clears the queue card |
 | Twilio retries the webhook | `register_incoming` is idempotent; no duplicate queue rows |
 | Dashboard disconnects | Subscriber removed by the `subscribe()` context manager, even mid-send |
 | Low transcription confidence | Surfaced in the UI rather than hidden — the operator is making a decision from that text |
+| Database unusable at startup | Runs on one in memory; every dashboard shows a banner. See [Storage](#storage) |
+| A save fails | Logged at ERROR and the call carries on; every dashboard shows the banner |
 
 ## Where a call lives
 
 ```
-  ring ──▶ webhook ──▶ CallRegistry._calls   ──▶  is_open?
-                       (one dict, in memory)       │
-                                         yes ──────┼────── no
-                                          │                │
-                                  live queue          Call History
-                                  /api/calls          /api/call-history
-                                  WS snapshot         (newest first, capped)
+  ring ──▶ webhook ──▶ CallRegistry._calls ──save──▶ Store (SQLite)
+                       (calls in play)                 │
+                             │                         │
+                        live queue                Call History
+                        /api/calls                /api/call-history
+                        WS snapshot               (paged, newest first)
 ```
 
-One dict holds both. A call does not move or get copied when it finishes — it
-simply stops being `is_open`, and `TERMINAL_STATUSES` in `schemas/calls.py` is
-the single definition of which statuses mean that. The queue filter and the
-history view reading the same predicate is deliberate: they drifted apart once,
-and a resolved call stayed in the live queue as a result.
+Every change goes through `CallRegistry._commit`: save the row, broadcast,
+and then, if the call is REJECTED or ENDED, drop it from memory. Saved first,
+so nothing reaches a dashboard that a restart would take back. Memory holds
+only calls in play — screening, holding, or on air until dial-complete ends
+them — so nothing needs a cap.
 
-`_prune_terminal` drops the oldest finished calls past `CALL_HISTORY_SIZE`.
-Nothing else evicts, so that cap is simultaneously the retention policy and the
-only thing bounding memory.
+`TERMINAL_STATUSES` in `schemas/calls.py` is the single definition of
+finished. The queue filters on it (`is_open`) and the history query generates
+its `IN` list from it, never a hand-written one. They drifted apart once, and
+a resolved call stayed in the live queue as a result.
 
-Because nothing is persisted, every registry method is synchronous. They used
-to be async to await a SQLite write; with the write gone, so is the reason.
+Store methods are synchronous like the registry's — see [Storage](#storage)
+for why that is fine.
 
 ### Caller "location" is not a location
 
@@ -279,24 +287,31 @@ build routing or policy on it.
 rule exists in Python only; the dashboard renders `caller.location` verbatim
 rather than reimplementing it in TypeScript.
 
-### The restart gap, and how far it closes
+### The restart gap, and how it closes
 
-Dropping the database bought simplicity and cost one thing: a restart loses
-every in-flight call while Twilio still holds the callers. `services/reconcile.py`
-closes most of that gap by asking Twilio who is queued and rebuilding the
-registry from the answer.
+A restart empties memory while Twilio still holds the callers.
+`services/reconcile.py` asks Twilio who is queued and rebuilds the registry
+from the answer. Twilio's Call resource has the number, the name and the start
+time. It never had what the caller said, or `FromCity`/`FromState`/
+`FromCountry` — those arrived as webhook parameters — so they come from the
+row saved when the call rang. `Call.recovered` marks a rebuilt call whose
+words were lost — no saved row, or one saved before their speech result — so
+it does not look like a caller who said nothing. A row that has finished
+meanwhile (they hung up while Twilio was being asked) is left alone.
 
-What it cannot close is the transcript. Twilio's Call resource has the number,
-the name and the start time; it has never had what the caller said, because
-that reached us as a `SpeechResult` webhook parameter and nowhere else. The
-same is true of `FromCity`/`FromState`/`FromCountry`.
+Then the sweep. Once reconciliation has run, any saved call still open that it
+did not restore ended while nobody was listening, and is closed as `ended`
+with a NULL `ended_at`, which History shows as "ended during a restart". Only
+after a reconcile that worked, including "no credentials" and "no queue": a
+failed one sweeps nothing, because then nobody knows who is still holding.
+That is why Twilio not answering raises `QueueUnknown` instead of looking like
+an empty queue — the two mean opposite things here. With reconciliation off
+(`RECONCILE_ON_STARTUP=false`, or demo mode), startup sweeps straight away.
 
-That asymmetry is the whole design constraint. Everything cheap to recover is
-recovered; the one expensive thing is marked (`Call.recovered`) so the UI can
-be honest about it rather than rendering a recovered caller identically to one
-who stayed silent. If that ever stops being good enough, the minimal fix is
-not "add a database back" — it is persisting *only* the transcript, keyed by
-CallSid, which is the sole field Twilio cannot give you.
+Two more webhooks can reach a process that never saw the call. A speech result
+from a caller who was mid-greeting through the restart revives them into the
+queue, from the saved row or the webhook's own parameters. A dial result for a
+caller on air through the restart closes the saved row with their on-air time.
 
 Two implementation notes that are easy to get wrong:
 
@@ -305,8 +320,8 @@ Two implementation notes that are easy to get wrong:
   slow Twilio there would make the number refuse new calls in order to recover
   old ones.
 - `register_recovered` **refuses to overwrite a known call**. A caller can be
-  mid-webhook while reconciliation runs, and a blank recovered row landing on
-  top of a live one would destroy the transcript that survived.
+  mid-webhook while reconciliation runs, and a rebuilt row landing on top of a
+  live one would throw away whatever arrived since.
 
 ### Two states, and what that costs
 
@@ -360,7 +375,7 @@ that single fact, and they pull in opposite directions:
 | --- | --- | --- |
 | Trigger | process start | an operator's click |
 | Assumes | the callers should come back | the callers should be let go |
-| On failure | empty queue, log line | caller stays on the dashboard |
+| On failure | empty queue, log line, no sweep | caller stays on the dashboard |
 
 The temptation is to make draining a shutdown hook, which is why it is worth
 writing down that it must not be. A deploy and a wrap-up are the same SIGTERM.
@@ -375,37 +390,65 @@ than vanishing from the queue while still connected, for the same reason
 `register_recovered` refuses to overwrite a live call — the dashboard must
 never be more optimistic than the carrier.
 
-### Why there is no database
+## Storage
 
-There was one: SQLite via SQLAlchemy, holding a blocklist and a `call_history`
-table. Both are gone, and the lesson is worth keeping.
+`services/store.py` keeps call history and contacts in SQLite, through the
+standard library's `sqlite3`: one file in a Docker volume, one connection, no
+server. There was an earlier database, via SQLAlchemy, and it was removed for
+costing an async driver, a session factory and a datetime type decorator to
+serve one list. This one is plain SQL in one module.
 
-The history table's only reader was a list of recent calls on one dashboard.
-For that, it cost an async driver, a session factory, a `UtcDateTime` type
-decorator (SQLite returns naive datetimes, which silently shifted every
-timestamp in the UI by the UTC offset), a schema-drift check at boot, and a
-volume in compose. It also produced the nastiest bug in this project's history:
-`create_all` never alters an existing table, so dropping a model column left a
-`NOT NULL` orphan that failed every insert — silently, because history writes
-were deliberately non-fatal, and invisibly to tests, which built a fresh
-database per test where the schema always matched.
+Every `Store` method is synchronous, called straight from the async handlers
+on the event-loop thread. Measured on this schema, a primary-key read takes
+about 4µs and a caller's history about 20µs, so a cache, a thread hop or a lock
+would buy nothing. `check_same_thread` stays on as a tripwire for anyone who
+adds a thread.
 
-Holding those calls in the registry instead costs one `sorted()` and a cap.
-The trade is that history resets on restart. That is a real loss and an
-acceptable one here; if it stops being acceptable, add storage back for that
-one feature deliberately, rather than because a scaffold arrived with it.
+**Migrations** are an append-only tuple in `services/migrations.py`, tracked by
+`PRAGMA user_version`, each in its own transaction. Never edit a shipped one;
+`test_migrations.py` freezes their hashes. A new column must be nullable or
+have a default, and only SQLite 3.46 syntax is allowed — the Debian base in
+`backend/Dockerfile` decides the containers' version, and a Mac's is newer.
+`make test-container` runs the suite on the containers' SQLite.
+
+The old database left one lesson. `create_all` never altered an existing
+table, so dropping a model column left a `NOT NULL` orphan that failed every
+insert — silently, because history writes were non-fatal, and invisibly to
+tests, which built a fresh database every time. Now a test upgrades a database
+populated at the previous version, and a failed write is logged at ERROR and
+shown on every dashboard.
+
+**Timestamps** are INTEGER milliseconds since the epoch, UTC, converted only by
+`_to_ms` and `_from_ms`; a naive datetime is refused. The old database returned
+naive datetimes, which shifted every time in the UI by the UTC offset.
+
+**It degrades rather than refusing to start.** If the file cannot be used — a
+volume the backend cannot write, a database left by newer code — `Store.open`
+logs why and runs on a database in memory, and every dashboard shows a banner
+that cannot be dismissed. The show crew updates unattended (`git pull`,
+`make office`), so a backend that refused to start would take the phone line
+down with it; one that forgets is still screening calls. The cost is spelled
+out in the banner: an empty contacts table blocks nobody.
+
+Transcripts are cleared after `TRANSCRIPT_RETENTION_DAYS` (default 90), at
+startup and whenever the line closes; the calls themselves are kept. There is
+no foreign key between calls and contacts: strangers have history, and
+removing a contact keeps their calls. Withheld callers are saved with no
+number, and a `CHECK` on the number columns is a tripwire so "anonymous" can
+never be saved as one.
 
 ## Scaling out
 
-Deliberately one uvicorn worker: `CallRegistry` and `Broadcaster` are both
-in-process. When you outgrow it, in order:
+Deliberately one uvicorn worker: `CallRegistry`, `Broadcaster` and `Store`
+(one SQLite connection) are all in-process. When you outgrow it, in order:
 
 1. **Move the fan-out to Redis pub/sub.** Keep `Broadcaster`'s interface; have
    `publish` write to a channel and each process subscribe and forward into its
    local queues.
-2. **Move call state to Redis.** `CallRegistry` is already the only writer, so
-   it's one class to reimplement, and doing so makes history shared across
-   workers and survive a restart in the same move.
+2. **Move calls in play to Redis.** `CallRegistry` is already the only writer,
+   so it's one class to reimplement.
+3. **Move storage to a database server.** `Store` is the only code that speaks
+   SQL, and a SQLite file serves one machine.
 
 Note there is no sticky-routing requirement anymore. With no per-call
 websocket to the provider, any worker can serve any webhook — which makes
@@ -421,11 +464,14 @@ Currently suitable for a trusted network, not the public internet:
   unauthenticated request from rejecting a caller you wanted on air. Put auth
   in front of `/api/calls` before this is reachable by anyone untrusted.
 - Webhook signature validation exists but is off by default. Turn it on before
-  pointing a real number at this — note it covers *both* webhooks, because an
+  pointing a real number at this — note it covers *every* webhook, because an
   unsigned post to `/webhook/speech-result` could put words in a caller's
-  mouth.
+  mouth, and one to `/webhook/call-status` could end a call while the caller
+  still holds.
 - Transcripts are personal data: a caller's number alongside whatever they
-  chose to say about themselves. Nothing is written to disk, which limits the
-  exposure, but they do sit in memory for the last `CALL_HISTORY_SIZE` calls
-  and they reach every connected dashboard. `LOG_LEVEL=DEBUG` also writes their
-  text to container logs — deliberately not the default.
+  chose to say about themselves. They are saved to disk, in the Docker volume,
+  and cleared after `TRANSCRIPT_RETENTION_DAYS` (90 by default) with
+  `secure_delete` on, so cleared text is overwritten rather than left in free
+  pages. Backups from `make office-backup` keep them for good. They also reach
+  every connected dashboard, and `LOG_LEVEL=DEBUG` writes their text to
+  container logs — deliberately not the default.

@@ -1,4 +1,10 @@
-import { formatElapsed, formatPhoneNumber, statusLabel } from '../lib/format';
+import {
+  callerFacts,
+  callerLabel,
+  formatElapsed,
+  numberUnderName,
+  statusLabel,
+} from '../lib/format';
 import type { Call } from '../types/events';
 
 interface Props {
@@ -82,6 +88,8 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
       : call.recovered
         ? 'Recovered after restart — reason unknown'
         : null);
+  const altNumber = numberUnderName(call.caller);
+  const facts = callerFacts(call.caller.history, 2);
 
   return (
     <li>
@@ -96,16 +104,22 @@ function QueueRow({ call, selected, onSelect, now }: RowProps) {
         <span className="call-row__head">
           <span className="call-row__identity">
             <span className="call-row__number">
-              {call.caller.name ?? formatPhoneNumber(call.caller.number)}
+              {call.caller.contact?.standing === 'favorite' && (
+                <span className="star" role="img" aria-label="Favorite">
+                  ★
+                </span>
+              )}
+              {callerLabel(call.caller)}
             </span>
             <span className="call-row__meta">
               <span className={`status status--${call.status}`}>{statusLabel(call.status)}</span>
               {/* Name replaces the number above, so show the number here --
                   an operator often needs to read it out or cross-reference it. */}
-              {call.caller.name && call.caller.number && (
-                <span className="call-row__alt">{formatPhoneNumber(call.caller.number)}</span>
-              )}
+              {altNumber && <span className="call-row__alt">{altNumber}</span>}
             </span>
+            {/* Two facts at most: enough to spot a regular or a repeat
+                rejection without opening the call. */}
+            {facts.length > 0 && <span className="call-row__facts">{facts.join(' · ')}</span>}
           </span>
 
           {/* Counts up live while the call is open, then freezes at its

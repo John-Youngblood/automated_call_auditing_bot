@@ -29,7 +29,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from app.api.auth import WS_PROTOCOL, WS_UNAUTHORIZED, SessionsDep, websocket_token
-from app.api.deps import BroadcasterDep, LineDep, RegistryDep, SettingsDep
+from app.api.deps import BroadcasterDep, LineDep, RegistryDep, SettingsDep, StoreDep
 from app.config import Settings
 from app.schemas.calls import CallStatus
 from app.schemas.events import ClientCommand, ClientCommandType, ServerEvent
@@ -50,6 +50,7 @@ async def frontend_stream(
     line: LineDep,
     settings: SettingsDep,
     sessions: SessionsDep,
+    store: StoreDep,
 ) -> None:
     # The token arrives as a subprotocol because browsers cannot set headers on
     # a WebSocket, and a token in the query string would land in every access
@@ -76,6 +77,7 @@ async def frontend_stream(
                 registry.open_calls(),
                 line_open=line.is_open,
                 screening_number=settings.shown_phone_number,
+                storage_warning=store.warning,
             ).to_wire()
         )
 
@@ -111,9 +113,7 @@ async def _write_events(websocket: WebSocket, subscriber: Subscriber) -> None:
         await websocket.send_json(payload)
 
 
-async def _read_commands(
-    websocket: WebSocket, registry: CallRegistry, settings: Settings
-) -> None:
+async def _read_commands(websocket: WebSocket, registry: CallRegistry, settings: Settings) -> None:
     """Handle inbound dashboard commands.
 
     Also the connection's liveness detector -- ``receive_json`` raising
@@ -170,9 +170,7 @@ async def _dispatch(
             # dashboard filed them as resolved.
             try:
                 if accepting:
-                    delivered = await put_on_air(
-                        call.call_id, settings.host_phone_number, settings
-                    )
+                    delivered = await put_on_air(call.call_id, settings.host_phone_number, settings)
                 else:
                     delivered = await turn_away(call.call_id, settings)
             except TelephonyUnavailable as exc:

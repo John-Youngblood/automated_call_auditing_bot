@@ -14,9 +14,11 @@ import httpx
 import pytest
 
 from app.config import Settings
+from app.schemas.calls import Call, CallStatus
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.reconcile import reconcile_hold_queue
+from app.services.store import Store
 from app.telephony.rest import TwilioRestClient, client_from_settings
 
 ACCOUNT = "AC00000000000000000000000000000000"
@@ -35,8 +37,9 @@ def settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **{**base, **overrides})  # type: ignore[arg-type]
 
 
-def registry() -> CallRegistry:
-    return CallRegistry(broadcaster=Broadcaster(queue_max=50))
+@pytest.fixture
+def reg(store: Store) -> CallRegistry:
+    return CallRegistry(Broadcaster(queue_max=50), store)
 
 
 def twilio_stub(
@@ -56,9 +59,7 @@ def twilio_stub(
         if path.endswith("/Queues.json"):
             return httpx.Response(200, json={"queues": queues if queues is not None else []})
         if path.endswith("/Members.json"):
-            return httpx.Response(
-                200, json={"queue_members": members or [], "next_page_uri": None}
-            )
+            return httpx.Response(200, json={"queue_members": members or [], "next_page_uri": None})
         if "/Calls/" in path:
             sid = path.rsplit("/", 1)[-1].removesuffix(".json")
             body = (calls or {}).get(sid)
@@ -112,7 +113,7 @@ def call_body(sid: str, number: str = "+15035551234", **overrides: object) -> di
     return {**body, **overrides}
 
 
-async def test_waiting_callers_are_restored_to_the_queue(patch_transport) -> None:
+async def test_waiting_callers_are_restored_to_the_queue(patch_transport, reg) -> None:
     patch_transport(
         twilio_stub(
             queues=[QUEUE],
@@ -123,7 +124,6 @@ async def test_waiting_callers_are_restored_to_the_queue(patch_transport) -> Non
             },
         )
     )
-    reg = registry()
 
     assert await reconcile_hold_queue(reg, settings()) == 2
 
@@ -136,40 +136,40 @@ async def test_waiting_callers_are_restored_to_the_queue(patch_transport) -> Non
     assert [c.caller.number for c in calls] == ["+15035551234", "+15035559999"]
 
 
-async def test_the_callers_original_start_time_is_kept(patch_transport) -> None:
+async def test_the_callers_original_start_time_is_kept(patch_transport, reg) -> None:
     """The queue is ordered by wait time, so restoring `now` would send
     everyone recovered to the back and reward hanging up and redialling."""
     patch_transport(
         twilio_stub(queues=[QUEUE], members=[member("CA1")], calls={"CA1": call_body("CA1")})
     )
-    reg = registry()
 
     await reconcile_hold_queue(reg, settings())
 
-    call = reg.require("CA1")
+    call = reg.get("CA1")
+    assert call is not None
     assert call.started_at == datetime(2026, 9, 21, 20, 13, 20, tzinfo=UTC)
 
 
-async def test_a_live_call_is_never_overwritten(patch_transport) -> None:
+async def test_a_live_call_is_never_overwritten(patch_transport, reg) -> None:
     """The race that matters: a caller mid-webhook while reconciliation runs.
 
-    Their transcript is the one thing that cannot be recovered from Twilio, so
-    clobbering it with a blank recovered row would destroy the only copy."""
+    The call in memory is the newest copy of them, so clobbering it with a
+    rebuilt one would throw away whatever arrived since."""
     patch_transport(
         twilio_stub(queues=[QUEUE], members=[member("CA1")], calls={"CA1": call_body("CA1")})
     )
-    reg = registry()
     reg.register_incoming("CA1")
     reg.set_transcript("CA1", "I have a question for the guest.", 0.94)
 
     assert await reconcile_hold_queue(reg, settings()) == 0
 
-    call = reg.require("CA1")
+    call = reg.get("CA1")
+    assert call is not None
     assert call.transcript == "I have a question for the guest."
     assert call.recovered is False
 
 
-async def test_a_caller_who_already_hung_up_is_not_restored(patch_transport) -> None:
+async def test_a_caller_who_already_hung_up_is_not_restored(patch_transport, reg) -> None:
     patch_transport(
         twilio_stub(
             queues=[QUEUE],
@@ -177,35 +177,81 @@ async def test_a_caller_who_already_hung_up_is_not_restored(patch_transport) -> 
             calls={"CA1": call_body("CA1", status="completed")},
         )
     )
-    reg = registry()
 
     assert await reconcile_hold_queue(reg, settings()) == 0
     assert reg.open_calls() == []
 
 
-async def test_a_failed_lookup_still_restores_the_caller(patch_transport) -> None:
+async def test_a_caller_who_hung_up_meanwhile_stays_ended(patch_transport, reg, store) -> None:
+    """Twilio's answer can be out of date by the time the rebuild acts on it:
+    the hang-up has already closed their saved row, end time and all."""
+    store.save_call(Call(call_id="CA1", status=CallStatus.ON_HOLD))
+    reg.end("CA1")
+    patch_transport(
+        twilio_stub(queues=[QUEUE], members=[member("CA1")], calls={"CA1": call_body("CA1")})
+    )
+
+    assert await reconcile_hold_queue(reg, settings()) == 0
+    assert reg.open_calls() == []
+    assert store.get_call("CA1").ended_at is not None
+
+
+async def test_only_a_caller_whose_words_were_lost_is_flagged(patch_transport, reg, store) -> None:
+    """A saved row that reached on-hold had its speech result: no transcript
+    there means they said nothing, not that it needs asking again."""
+    store.save_call(Call(call_id="CA1", status=CallStatus.ON_HOLD))
+    store.save_call(Call(call_id="CA2"))  # still talking when the backend went
+    patch_transport(
+        twilio_stub(
+            queues=[QUEUE],
+            members=[member("CA1", 1), member("CA2", 2)],
+            calls={"CA1": call_body("CA1"), "CA2": call_body("CA2")},
+        )
+    )
+
+    assert await reconcile_hold_queue(reg, settings()) == 2
+    assert [(c.call_id, c.recovered) for c in reg.open_calls()] == [
+        ("CA1", False),
+        ("CA2", True),
+    ]
+
+
+async def test_a_failed_lookup_still_restores_the_caller(patch_transport, reg) -> None:
     """Losing someone's number is survivable; losing their place is not."""
     patch_transport(twilio_stub(queues=[QUEUE], members=[member("CA1")], calls={}))
-    reg = registry()
 
     assert await reconcile_hold_queue(reg, settings()) == 1
-    assert reg.require("CA1").caller.number is None
+    assert reg.get("CA1").caller.number is None
 
 
-async def test_no_queue_yet_is_not_an_error(patch_transport) -> None:
+async def test_a_withheld_number_stays_withheld(patch_transport, reg) -> None:
+    """The Call resource carries Twilio's placeholders just as From does."""
+    patch_transport(
+        twilio_stub(
+            queues=[QUEUE],
+            members=[member("CA1")],
+            calls={"CA1": call_body("CA1", "+266696687")},
+        )
+    )
+
+    assert await reconcile_hold_queue(reg, settings()) == 1
+    assert reg.get("CA1").caller.number is None
+
+
+async def test_no_queue_yet_is_not_an_error(patch_transport, reg) -> None:
     patch_transport(twilio_stub(queues=[], members=[]))
-    assert await reconcile_hold_queue(registry(), settings()) == 0
+    assert await reconcile_hold_queue(reg, settings()) == 0
 
 
-async def test_twilio_being_down_leaves_an_empty_queue(patch_transport) -> None:
+async def test_twilio_being_down_leaves_an_empty_queue(patch_transport, reg) -> None:
     """A boot-time failure must not stop the service answering new calls."""
     patch_transport(twilio_stub(fail={f"/2010-04-01/Accounts/{ACCOUNT}/Queues.json"}))
-    assert await reconcile_hold_queue(registry(), settings()) == 0
+    assert await reconcile_hold_queue(reg, settings()) == 0
 
 
-async def test_missing_credentials_skip_silently() -> None:
+async def test_missing_credentials_skip_silently(reg) -> None:
     blank = Settings(_env_file=None)
-    assert await reconcile_hold_queue(registry(), blank) == 0
+    assert await reconcile_hold_queue(reg, blank) == 0
 
 
 class TestCredentialSelection:

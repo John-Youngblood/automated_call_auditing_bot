@@ -7,6 +7,7 @@ interface Props {
   pending: boolean;
   onAccept: (callId: string) => void;
   onReject: (callId: string) => void;
+  onBlock: (number: string) => void;
 }
 
 /**
@@ -15,8 +16,12 @@ interface Props {
  * `POST /api/calls/{id}/accept|reject`. Both reach Twilio before the status
  * changes, so a failure leaves the call on the dashboard — see
  * `backend/app/services/decisions.py`.
+ *
+ * Blocking is quieter and last: it outlives this call, so it asks first.
  */
-export default function CallActions({ call, pending, onAccept, onReject }: Props) {
+export default function CallActions({ call, pending, onAccept, onReject, onBlock }: Props) {
+  const { number } = call.caller;
+
   if (isTerminal(call.status)) {
     return (
       <div className="actions actions--resolved">
@@ -46,6 +51,16 @@ export default function CallActions({ call, pending, onAccept, onReject }: Props
       >
         {pending ? 'Working…' : 'Reject Call'}
       </button>
+      {number && (
+        <button
+          type="button"
+          className="button button--ghost button--compact"
+          onClick={() => onBlock(number)}
+          disabled={pending}
+        >
+          Block number…
+        </button>
+      )}
     </div>
   );
 }

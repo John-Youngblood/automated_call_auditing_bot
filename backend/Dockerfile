@@ -1,13 +1,20 @@
 # syntax=docker/dockerfile:1
 
 # --- base: runtime + third-party deps (cached independently of app code) ----
-FROM python:3.12-slim AS base
+# Debian release pinned, not just "slim": the Debian base decides which SQLite
+# Python links against (3.46.1 on trixie), and the schema and migrations are
+# written for that version. A floating tag would change it on some rebuild.
+FROM python:3.12-slim-trixie AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /srv
 RUN groupadd --system app && useradd --system --gid app --no-create-home app
+# Where the database lives. A new named volume copies the mount point's
+# ownership from the image, and the backend runs as the non-root app user --
+# without this the volume is root-owned and storage falls back to memory.
+RUN mkdir -p /srv/data && chown app:app /srv/data
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 

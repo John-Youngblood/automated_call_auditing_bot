@@ -6,6 +6,8 @@
 **/.pytest_cache
 **/.ruff_cache
 **/*.log
+backend/data
+backups
 .env
 .env.*
 !.env.example

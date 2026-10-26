@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import calls, frontend, health, session, webhooks
+from app.api.routes import calls, contacts, frontend, health, session, webhooks
 from app.config import STATIC_DIR, Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
@@ -29,6 +29,7 @@ from app.services.hold_queue import size_hold_queue
 from app.services.line_state import LineState
 from app.services.reconcile import reconcile_hold_queue
 from app.services.sessions import MIN_PASSWORD_LENGTH, Sessions
+from app.services.store import Store
 from app.telephony.rest import client_from_settings
 
 #: The built dashboard, when it has been baked into the image. Present in the
@@ -63,12 +64,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     log = logging.getLogger(__name__)
 
+    # Never raises: a database it cannot use is swapped for one in memory, and
+    # Store.open has already said why at ERROR.
+    store = Store.open(settings.database_path)
+    app.state.store = store
+    store.purge_transcripts(settings.transcript_retention_days)
+    if store.warning is None:
+        log.info("storage ready at %s: %s contacts, %s calls", store.path, *store.counts())
+
     broadcaster = Broadcaster(queue_max=settings.frontend_queue_max)
     app.state.broadcaster = broadcaster
-    app.state.registry = CallRegistry(
-        broadcaster=broadcaster,
-        history_size=settings.call_history_size,
-    )
+    app.state.registry = CallRegistry(broadcaster, store)
     app.state.line = LineState(broadcaster, is_open=settings.line_open_on_start)
     app.state.sessions = Sessions(settings.dashboard_password)
 
@@ -152,6 +158,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 reconcile_hold_queue(app.state.registry, settings), name="reconcile-hold-queue"
             )
         )
+    else:
+        # Nothing is going to say who is still holding, so whatever the last
+        # run left open ended with it. Reconciliation does this itself.
+        app.state.registry.sweep_stale()
 
     try:
         yield
@@ -164,6 +174,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Release dashboards before the server stops accepting, so clients see
         # a clean close and reconnect rather than a timeout.
         broadcaster.close_all()
+        store.close()
         log.info("call screener shutting down")
 
 
@@ -187,7 +198,7 @@ def create_app() -> FastAPI:
             CORSMiddleware,
             allow_origins=settings.cors_origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PATCH"],
             allow_headers=["*"],
         )
 
@@ -195,6 +206,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks.router)
     app.include_router(session.router)
     app.include_router(calls.router)
+    app.include_router(contacts.router)
     app.include_router(frontend.router)
 
     # Serves the audio files the *_AUDIO_URL settings name by bare filename.

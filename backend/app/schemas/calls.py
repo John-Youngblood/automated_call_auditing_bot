@@ -4,9 +4,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
+
+
+def utc_now() -> datetime:
+    """Now, to the millisecond -- all that storage keeps.
+
+    Truncated here rather than on save, so a call reads the same live as it
+    does from history afterwards.
+    """
+    now = datetime.now(UTC)
+    return now.replace(microsecond=now.microsecond // 1000 * 1000)
 
 
 class CamelModel(BaseModel):
@@ -44,16 +55,62 @@ TERMINAL_STATUSES = frozenset(
 )
 
 
+#: A favorite gets a star and nothing else. A blocked number is turned away
+#: before it is answered.
+ContactStanding = Literal["favorite", "blocked"]
+
+
+class Contact(CamelModel):
+    """What the show knows about one phone number. Kept across restarts."""
+
+    number: str
+    name: str | None = None
+    #: Free text for the operators; doubles as the reason for a block.
+    note: str | None = None
+    standing: ContactStanding | None = None
+    standing_since: datetime | None = None
+    #: Rings refused since the block, so an operator can tell a number that
+    #: gave up from one still trying.
+    blocked_attempts: int = 0
+    updated_at: datetime
+
+
+class ContactListItem(Contact):
+    calls: int = 0
+    last_called_at: datetime | None = None
+
+
+class CallerHistory(CamelModel):
+    """This number's earlier calls, so an operator recognises a regular -- or
+    someone they already turned down tonight."""
+
+    previous_calls: int = 0
+    #: Calls that reached the host, not just accepted: a bridge that never
+    #: connected does not count.
+    times_on_air: int = 0
+    last_on_air_at: datetime | None = None
+    times_rejected: int = 0
+    last_called_at: datetime | None = None
+
+
 class Caller(CamelModel):
+    #: E.164, or None when the caller withheld their number -- never Twilio's
+    #: "anonymous" placeholders. See app.services.phone.caller_number.
     number: str | None = None
     #: The carrier's caller-ID name. Only present when Caller ID Lookup is
     #: enabled on the Twilio number (a paid per-lookup feature, off by
-    #: default), and even then often generic ("WIRELESS CALLER").
+    #: default), and even then often generic ("WIRELESS CALLER"). Not saved.
     name: str | None = None
     #: Short label for where the *number* is registered, e.g. "Portland, OR".
     #: Formatted server-side by app.services.phone.format_location so the rule
     #: for picking state vs country lives in one language, not two.
     location: str | None = None
+    #: The carrier vouched for this caller's right to the number (full STIR/
+    #: SHAKEN attestation). Without it the number may be spoofed -- worth
+    #: knowing before blocking it.
+    verified: bool = False
+    contact: Contact | None = None
+    history: CallerHistory = Field(default_factory=CallerHistory)
 
 
 class Call(CamelModel):
@@ -63,7 +120,9 @@ class Call(CamelModel):
     status: CallStatus = CallStatus.SCREENING
     caller: Caller = Field(default_factory=Caller)
     to_number: str | None = None
-    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime = Field(default_factory=utc_now)
+    #: None on a finished call means it ended while the backend was
+    #: restarting, so nobody saw when. See CallRegistry.sweep_stale.
     ended_at: datetime | None = None
 
     #: What the caller said when asked why they are calling. Populated in one
@@ -84,9 +143,10 @@ class Call(CamelModel):
     #: bridge never connected, usually because the host was already on a call.
     on_air_seconds: int | None = None
 
-    #: Rebuilt from Twilio after a restart, so genuinely on hold but with no
-    #: transcript -- which otherwise looks identical to a caller who said
-    #: nothing. See app/services/reconcile.py.
+    #: Rebuilt from Twilio after a restart with what the caller said lost: no
+    #: saved row, or one saved before their speech result. Otherwise that
+    #: looks identical to a caller who said nothing. See
+    #: app/services/reconcile.py.
     recovered: bool = False
 
     @property

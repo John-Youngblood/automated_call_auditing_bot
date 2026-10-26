@@ -3,11 +3,25 @@ import { useState } from 'react';
 import { sessionApi } from '../lib/api';
 
 import { useCallHistory } from '../hooks/useCallHistory';
+import { useContactActions } from '../hooks/useContactActions';
+import { useContacts } from '../hooks/useContacts';
 import { useToasts } from '../hooks/useToasts';
 import { useCallStream } from '../hooks/useCallStream';
 import { useNow } from '../hooks/useNow';
-import { formatClock, formatElapsed, formatPhoneNumber, statusLabel } from '../lib/format';
+import {
+  callerLabel,
+  formatClock,
+  formatElapsed,
+  formatPhoneNumber,
+  numberUnderName,
+  statusLabel,
+} from '../lib/format';
+import type { Call } from '../types/events';
 import CallActions from './CallActions';
+import CallerCard from './CallerCard';
+import ConfirmDialog from './ConfirmDialog';
+import ContactDialog from './ContactDialog';
+import ContactsView from './ContactsView';
 import LineControls from './LineControls';
 import Toasts from './Toasts';
 import CallHistoryView from './CallHistoryView';
@@ -15,7 +29,7 @@ import CallQueue from './CallQueue';
 import ConnectionBadge from './ConnectionBadge';
 import TranscriptPanel from './TranscriptPanel';
 
-type View = 'live' | 'history';
+type View = 'live' | 'history' | 'contacts';
 
 interface Props {
   onSignedOut: () => void;
@@ -24,10 +38,10 @@ interface Props {
 /**
  * Dashboard shell. All state comes from hooks; this component arranges it.
  *
- * Two top-level views rather than one crowded screen: the live queue is a work
- * surface where seconds matter, history is a record you read at leisure. The
- * queue keeps running in the background either way -- switching to history
- * does not disconnect the websocket, so nothing is missed.
+ * Separate top-level views rather than one crowded screen: the live queue is a
+ * work surface where seconds matter, history and contacts are records you read
+ * at leisure. The queue keeps running in the background either way --
+ * switching views does not disconnect the websocket, so nothing is missed.
  */
 export default function Dashboard({ onSignedOut }: Props) {
   const [view, setView] = useState<View>('live');
@@ -46,14 +60,25 @@ export default function Dashboard({ onSignedOut }: Props) {
     endedCount,
     lineOpen,
     screeningNumber,
+    storageWarning,
+    contactsVersion,
   } = useCallStream();
 
   const now = useNow();
 
-  // Only fetch history while that view is open; the queue is the hot path.
-  const history = useCallHistory(endedCount, view === 'history');
+  // Only fetch history and contacts while their view is open; the queue is
+  // the hot path.
+  const history = useCallHistory(endedCount, contactsVersion, view === 'history');
+  const contacts = useContacts(contactsVersion, view === 'contacts');
 
   const { toasts, push, dismiss } = useToasts();
+  const contactActions = useContactActions(activeCalls, push);
+  const { contactDialog, blockDialog } = contactActions;
+
+  function showCallsFrom(number: string) {
+    history.showNumber(number);
+    setView('history');
+  }
 
   return (
     <div className="app">
@@ -94,6 +119,14 @@ export default function Dashboard({ onSignedOut }: Props) {
           >
             Call History
           </button>
+          <button
+            type="button"
+            className={`tab${view === 'contacts' ? ' tab--active' : ''}`}
+            onClick={() => setView('contacts')}
+            aria-current={view === 'contacts'}
+          >
+            Contacts
+          </button>
         </nav>
 
         <div className="app__header-right">
@@ -109,6 +142,14 @@ export default function Dashboard({ onSignedOut }: Props) {
           </button>
         </div>
       </header>
+
+      {/* Not dismissable: it stays true until the backend restarts, and a
+          crew that cleared it would go on trusting blocks that do nothing. */}
+      {storageWarning && (
+        <div className="alert" role="alert">
+          <span>{storageWarning}</span>
+        </div>
+      )}
 
       {lastError && (
         <div className="alert" role="alert">
@@ -146,16 +187,19 @@ export default function Dashboard({ onSignedOut }: Props) {
                 <header className="detail__header">
                   <div>
                     <h2>
-                      {selectedCall.caller.name ??
-                        formatPhoneNumber(selectedCall.caller.number)}
+                      {selectedCall.caller.contact?.standing === 'favorite' && (
+                        <span className="star" role="img" aria-label="Favorite">
+                          ★
+                        </span>
+                      )}
+                      {callerLabel(selectedCall.caller)}
                     </h2>
                     <p className="detail__subtitle">
                       {[
                         // Name is the headline, so the number belongs here.
-                        selectedCall.caller.name
-                          ? formatPhoneNumber(selectedCall.caller.number)
-                          : null,
+                        numberUnderName(selectedCall.caller),
                         selectedCall.caller.location,
+                        selectedCall.caller.verified ? 'caller ID verified' : null,
                         `started ${formatClock(selectedCall.startedAt)}`,
                       ]
                         .filter(Boolean)
@@ -175,6 +219,15 @@ export default function Dashboard({ onSignedOut }: Props) {
                   </div>
                 </header>
 
+                {selectedCall.caller.number && (
+                  <CallerCard
+                    number={selectedCall.caller.number}
+                    caller={selectedCall.caller}
+                    onShowCalls={showCallsFrom}
+                    onEditContact={contactActions.editContact}
+                  />
+                )}
+
                 <TranscriptPanel call={selectedCall} />
 
                 <CallActions
@@ -182,18 +235,30 @@ export default function Dashboard({ onSignedOut }: Props) {
                   pending={pendingCallId === selectedCall.callId}
                   onAccept={acceptCall}
                   onReject={rejectCall}
+                  onBlock={contactActions.blockNumber}
                 />
               </>
             )}
           </section>
         </main>
-      ) : (
+      ) : view === 'history' ? (
         <main className="app__body app__body--single">
           <CallHistoryView
-            calls={history.calls}
-            loading={history.loading}
-            error={history.error}
-            onRefresh={history.refresh}
+            history={history}
+            storageWarning={storageWarning}
+            onEditContact={contactActions.editContact}
+            onBlock={contactActions.blockNumber}
+            onUnblock={contactActions.unblockNumber}
+          />
+        </main>
+      ) : (
+        <main className="app__body app__body--single">
+          <ContactsView
+            contacts={contacts}
+            onAdd={contactActions.addContact}
+            onEdit={contactActions.editContact}
+            onUnblock={contactActions.unblockNumber}
+            onShowCalls={showCallsFrom}
           />
         </main>
       )}
@@ -212,7 +277,37 @@ export default function Dashboard({ onSignedOut }: Props) {
       </footer>
 
       <Toasts toasts={toasts} onDismiss={dismiss} />
+
+      {/* One of each for the whole page, whichever view opened it. */}
+      <ContactDialog {...contactDialog} />
+      <ConfirmDialog
+        open={blockDialog.number !== null}
+        title={`Block ${blockDialog.number ? formatPhoneNumber(blockDialog.number) : 'this number'}?`}
+        message={blockMessage(blockDialog.liveCall)}
+        confirmLabel="Block number"
+        pending={blockDialog.pending}
+        onConfirm={blockDialog.onConfirm}
+        onCancel={blockDialog.onCancel}
+      />
     </div>
+  );
+}
+
+/**
+ * What blocking does, said before it happens. Caller ID can be spoofed, so a
+ * block from an unverified call may land on whoever really owns the number.
+ */
+function blockMessage(liveCall: Call | null) {
+  if (!liveCall) return <p>Future calls from this number are turned away before they ring.</p>;
+  return (
+    <>
+      <p>Their current call ends now and future calls are turned away before they ring.</p>
+      <p>
+        {liveCall.caller.verified
+          ? 'Caller ID on this call is verified.'
+          : 'Caller ID on this call isn’t verified, so the number may be spoofed — you could be blocking someone else.'}
+      </p>
+    </>
   );
 }
 

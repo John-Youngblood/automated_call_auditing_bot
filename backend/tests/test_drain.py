@@ -12,6 +12,7 @@ from app.schemas.calls import Caller, CallStatus
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.drain import hang_up_holders
+from app.services.store import Store
 from app.telephony.rest import TwilioRestClient
 from app.telephony.twiml import speak_and_hangup
 
@@ -27,12 +28,18 @@ def settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **{**base, **overrides})  # type: ignore[arg-type]
 
 
-def registry_with(*call_ids: str) -> CallRegistry:
-    reg = CallRegistry(broadcaster=Broadcaster(queue_max=50))
-    for call_id in call_ids:
-        reg.register_incoming(call_id, caller=Caller(number="+15035551234"))
-        reg.set_transcript(call_id, "I have a question.", 0.9)
-    return reg
+@pytest.fixture
+def registry_with(store: Store):
+    """A registry with these calls on hold, transcripts in."""
+
+    def build(*call_ids: str) -> CallRegistry:
+        reg = CallRegistry(Broadcaster(queue_max=50), store)
+        for call_id in call_ids:
+            reg.register_incoming(call_id, caller=Caller(number="+15035551234"))
+            reg.set_transcript(call_id, "I have a question.", 0.9)
+        return reg
+
+    return build
 
 
 @pytest.fixture
@@ -91,14 +98,16 @@ class TestGoodbyeTwiml:
 
     def test_the_message_cannot_break_out_of_the_xml(self) -> None:
         """The message is configuration, so it is built, not interpolated."""
-        doc = fromstring(speak_and_hangup(
-            text="Bye</Say><Dial>+15559999999</Dial><Say>", tts_voice="Polly.Joanna"
-        ).body)
+        doc = fromstring(
+            speak_and_hangup(
+                text="Bye</Say><Dial>+15559999999</Dial><Say>", tts_voice="Polly.Joanna"
+            ).body
+        )
         assert [child.tag for child in doc] == ["Say", "Hangup"]
         assert doc.find("Dial") is None
 
 
-async def test_everyone_holding_is_hung_up(patch_transport) -> None:
+async def test_everyone_holding_is_hung_up(patch_transport, registry_with, store) -> None:
     transport, seen = twilio_stub()
     patch_transport(transport)
     reg = registry_with("CA1", "CA2", "CA3")
@@ -108,10 +117,12 @@ async def test_everyone_holding_is_hung_up(patch_transport) -> None:
     assert sorted(result.ended) == ["CA1", "CA2", "CA3"]
     assert result.failed == []
     assert reg.open_calls() == []
-    assert all(c.status is CallStatus.ENDED for c in reg.recent_calls())
+    assert all(store.get_call(sid).status is CallStatus.ENDED for sid in ("CA1", "CA2", "CA3"))
 
 
-async def test_callers_hear_a_goodbye_rather_than_a_silent_drop(patch_transport) -> None:
+async def test_callers_hear_a_goodbye_rather_than_a_silent_drop(
+    patch_transport, registry_with
+) -> None:
     transport, seen = twilio_stub()
     patch_transport(transport)
 
@@ -125,7 +136,9 @@ async def test_callers_hear_a_goodbye_rather_than_a_silent_drop(patch_transport)
     assert "folks" in body
 
 
-async def test_a_caller_we_could_not_reach_stays_on_the_dashboard(patch_transport) -> None:
+async def test_a_caller_we_could_not_reach_stays_on_the_dashboard(
+    patch_transport, registry_with
+) -> None:
     """The failure that matters: they are still connected and still holding,
     so removing them from the queue would hide a live caller."""
     transport, _ = twilio_stub(reject={"CA2"}, statuses={"CA2": "in-progress"})
@@ -139,7 +152,9 @@ async def test_a_caller_we_could_not_reach_stays_on_the_dashboard(patch_transpor
     assert [c.call_id for c in reg.open_calls()] == ["CA2"]
 
 
-async def test_a_caller_who_already_hung_up_counts_as_success(patch_transport) -> None:
+async def test_a_caller_who_already_hung_up_counts_as_success(
+    patch_transport, registry_with
+) -> None:
     """Twilio rejects the write because the call is gone. The goal was 'this
     caller is not holding', which is satisfied -- reporting it as a failure
     would send an operator chasing a call that ended by itself."""
@@ -153,12 +168,12 @@ async def test_a_caller_who_already_hung_up_counts_as_success(patch_transport) -
     assert result.failed == []
 
 
-async def test_an_empty_queue_needs_no_credentials() -> None:
+async def test_an_empty_queue_needs_no_credentials(registry_with) -> None:
     result = await hang_up_holders(registry_with(), Settings(_env_file=None))
     assert result.ended == [] and result.failed == []
 
 
-async def test_missing_credentials_report_failure_not_success() -> None:
+async def test_missing_credentials_report_failure_not_success(registry_with) -> None:
     """Silence here would let an operator believe the line was cleared."""
     reg = registry_with("CA1", "CA2")
 
@@ -169,7 +184,7 @@ async def test_missing_credentials_report_failure_not_success() -> None:
     assert len(reg.open_calls()) == 2
 
 
-async def test_bad_credentials_are_not_reported_as_hung_up(patch_transport) -> None:
+async def test_bad_credentials_are_not_reported_as_hung_up(patch_transport, registry_with) -> None:
     """The failure mode this guards: Twilio 401s the hang-up, and the probe
     that follows 401s too. Not knowing is not the same as success -- treating
     it as one leaves a real person connected while the dashboard says they
@@ -189,7 +204,7 @@ async def test_bad_credentials_are_not_reported_as_hung_up(patch_transport) -> N
     assert [c.call_id for c in reg.open_calls()] == ["CA1"]
 
 
-async def test_a_404_on_the_hangup_still_counts_as_gone(patch_transport) -> None:
+async def test_a_404_on_the_hangup_still_counts_as_gone(patch_transport, registry_with) -> None:
     """The case the above must not break: Twilio saying the call does not
     exist is positive confirmation that nobody is holding."""
 

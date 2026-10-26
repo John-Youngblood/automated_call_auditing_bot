@@ -8,6 +8,7 @@ work on the dashboard with no phone number, no tunnel, and no real caller.
     python scripts/simulate_call.py                 # one call
     python scripts/simulate_call.py --calls 3       # a small queue
     python scripts/simulate_call.py --say "I have a question for your guest"
+    python scripts/simulate_call.py --number +15035550147   # a repeat caller
 
 When the backend validates webhook signatures (the office stack always does),
 requests are signed with TWILIO_AUTH_TOKEN from the same .env, so they pass
@@ -48,8 +49,9 @@ REASONS = [
 
 async def post_webhook(
     client: httpx.AsyncClient, base: str, path: str, data: dict[str, str]
-) -> None:
-    """POST as Twilio would, signed when the backend checks signatures.
+) -> str:
+    """POST as Twilio would, signed when the backend checks signatures, and
+    return the TwiML.
 
     Signed against PUBLIC_BASE_URL, not ``base``: the backend rebuilds the URL
     from that setting, because it is the address Twilio actually requests.
@@ -63,18 +65,21 @@ async def post_webhook(
         )
     response = await client.post(f"{base}{path}", data=data, headers=headers)
     response.raise_for_status()
+    return response.text
 
 
 def call_sid() -> str:
     return "CA" + "".join(random.choices(string.ascii_lowercase + string.digits, k=20))
 
 
-async def place_call(client: httpx.AsyncClient, base: str, reason: str, delay: float) -> None:
+async def place_call(
+    client: httpx.AsyncClient, base: str, reason: str, delay: float, number: str | None
+) -> None:
     await asyncio.sleep(delay)
     sid = call_sid()
-    number = f"+1503555{random.randint(1000, 9999)}"
+    number = number or f"+1503555{random.randint(1000, 9999)}"
 
-    await post_webhook(
+    twiml = await post_webhook(
         client,
         base,
         "/webhook/incoming-call",
@@ -90,6 +95,10 @@ async def place_call(client: httpx.AsyncClient, base: str, reason: str, delay: f
         },
     )
 
+    # Twilio would hang up here, so there is no speech result to send.
+    if "<Reject" in twiml:
+        print(f"[{sid}] turned away from {number} (blocked, line closed or queue full)")
+        return
     print(f"[{sid}] ringing from {number}, greeting playing")
 
     # Twilio would spend this time playing the greeting and listening.
@@ -113,6 +122,11 @@ async def main() -> int:
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument("--calls", type=int, default=1)
     parser.add_argument("--say", help="what the caller says (default: a canned reason)")
+    parser.add_argument(
+        "--number",
+        help="the caller's number in E.164, to call back as the same person or test a block "
+        "(default: a random one)",
+    )
     args = parser.parse_args()
 
     try:
@@ -124,6 +138,7 @@ async def main() -> int:
                         args.base_url.rstrip("/"),
                         args.say or REASONS[i % len(REASONS)],
                         delay=i * 1.5,
+                        number=args.number,
                     )
                     for i in range(args.calls)
                 )

@@ -1,7 +1,7 @@
 {
   "name": "call-screener-frontend",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.1.0",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"

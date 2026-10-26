@@ -22,6 +22,10 @@ dist/
 # Current public tunnel hostname, written while tunnel.sh runs.
 .tunnel-url
 
+# Call history and contacts from local runs, and `make office-backup` copies.
+backend/data/
+backups/
+
 # Tooling / OS
 .DS_Store
 *.log

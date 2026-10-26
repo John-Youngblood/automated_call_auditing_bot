@@ -226,6 +226,11 @@ h2 {
   .callin__label {
     display: none;
   }
+
+  /* Three tabs only fit a phone's width with the padding trimmed. */
+  .tab {
+    padding: 6px 11px;
+  }
 }
 
 /* Line controls live down here rather than in the header: going off air is a
@@ -420,6 +425,13 @@ h2 {
   font-weight: 600;
 }
 
+/* A repeat caller's record, under the status. Muted: it informs the decision
+   without competing with the transcript preview for the eye. */
+.call-row__facts {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .call-row__timer {
   font-family: var(--mono);
   font-size: 12px;
@@ -526,6 +538,38 @@ h2 {
   font-size: 15px;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
+}
+
+/* What is known about the number, between who is calling and what they said. */
+.caller-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 18px;
+  font-size: 13px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.caller-card p {
+  margin: 0;
+}
+
+.caller-card__facts {
+  color: var(--text-muted);
+}
+
+/* An operator's note keeps its line breaks, and a pasted URL must not push
+   the pane wider than the column. */
+.caller-card__note {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.caller-card__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
 }
 
 /* ------------------------------------------------------------ transcript -- */
@@ -708,6 +752,21 @@ h2 {
   background: var(--surface-alt);
 }
 
+/* Not a call status but a standing, beside the caller's name in history. Red
+   because it outlives the call: everything from this number is turned away. */
+.status--blocked {
+  margin-inline-start: 7px;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* Amber like the other "worth a second look" marks, and a glyph rather than
+   an icon set: it is the only icon the dashboard has. */
+.star {
+  margin-inline-end: 5px;
+  color: var(--warning);
+}
+
 .badges {
   display: flex;
   align-items: center;
@@ -806,6 +865,7 @@ h2 {
   background: transparent;
   border: none;
   border-radius: 999px;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -842,13 +902,15 @@ h2 {
   background: var(--accent-soft);
 }
 
-/* Single-pane views (history) drop the queue column. */
+/* Single-pane views (history, contacts) drop the queue column. */
 .app__body--single {
   grid-template-columns: 1fr;
 }
 
-/* --------------------------------------------------------------- history -- */
-.history {
+/* ------------------------------------------------------ history + contacts -- */
+/* The two record views share a panel and a table; only their cells differ. */
+.history,
+.contacts {
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -859,7 +921,8 @@ h2 {
   overflow: hidden;
 }
 
-.history__header {
+.history__header,
+.contacts__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -868,41 +931,54 @@ h2 {
   border-bottom: 1px solid var(--border);
 }
 
-.history__header h2 {
+.history__header h2,
+.contacts__header h2 {
   font-size: 17px;
 }
 
-.history__subtitle {
+.history__subtitle,
+.contacts__subtitle {
   margin: 3px 0 0;
   font-size: 13px;
   color: var(--text-muted);
 }
 
+/* Storage has failed, so "saved on this machine" would be a lie. */
+.history__subtitle--warning {
+  color: var(--warning);
+}
+
 .history__empty,
-.history__error {
+.history__error,
+.contacts__empty,
+.contacts__error {
   margin: 0;
   padding: 24px 18px;
   font-size: 13.5px;
   color: var(--text-muted);
 }
 
-.history__error {
+.history__error,
+.contacts__error {
   color: var(--danger);
 }
 
-.history__scroll {
+.history__scroll,
+.contacts__scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
 }
 
-.history__table {
+.history__table,
+.contacts__table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13.5px;
 }
 
-.history__table thead th {
+.history__table thead th,
+.contacts__table thead th {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -917,13 +993,15 @@ h2 {
   border-bottom: 1px solid var(--border);
 }
 
-.history__table td {
+.history__table td,
+.contacts__table td {
   padding: 12px 18px;
   vertical-align: top;
   border-bottom: 1px solid var(--border);
 }
 
-.history__table tbody tr:hover {
+.history__table tbody tr:hover,
+.contacts__table tbody tr:hover {
   background: var(--surface-alt);
 }
 
@@ -1002,6 +1080,179 @@ h2 {
   color: var(--warning);
 }
 
+/* In place of a duration nobody knows. */
+.history__restart {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.history__actions,
+.contacts__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.history__actions {
+  margin-top: 4px;
+}
+
+.history__more {
+  display: flex;
+  justify-content: center;
+  padding: 14px;
+}
+
+.contacts__name,
+.contacts__number {
+  display: block;
+  white-space: nowrap;
+}
+
+.contacts__name {
+  font-weight: 600;
+}
+
+.contacts__unnamed {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.contacts__number {
+  margin-top: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* Absorbs the spare width, like the transcript column in history. */
+.contacts__note {
+  width: 100%;
+  min-width: 200px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.contacts__note span {
+  display: block;
+}
+
+.contacts__blocked {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.contacts__calls {
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.contacts__empty p {
+  max-width: 52ch;
+  margin: 0 0 12px;
+}
+
+/* ------------------------------------------------------- toolbar + chips -- */
+/* Search and filters along the top of a record view. */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar__search {
+  flex: 1 1 240px;
+  max-width: 420px;
+  padding: 7px 11px;
+  font-size: 13.5px;
+}
+
+.toolbar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+button.chip {
+  cursor: pointer;
+}
+
+.chip--active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: currentcolor;
+}
+
+.chip__count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.chip__remove {
+  width: 18px;
+  height: 18px;
+  margin-inline-end: -5px;
+  padding: 0;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.chip__remove:hover {
+  background: rgb(127 127 127 / 18%);
+}
+
+.chip:focus-visible,
+.chip__remove:focus-visible,
+.link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A quiet action inside a row or card, where a full button would outweigh
+   the content it acts on. */
+.link {
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
 /* ----------------------------------------------------------------- login -- */
 .login {
   display: flex;
@@ -1045,7 +1296,8 @@ h2 {
   text-align: left;
 }
 
-.login__input {
+.login__input,
+.input {
   padding: 10px 12px;
   font: inherit;
   color: var(--text);
@@ -1054,7 +1306,8 @@ h2 {
   border-radius: 8px;
 }
 
-.login__input:focus-visible {
+.login__input:focus-visible,
+.input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1224,6 +1477,72 @@ h2 {
   flex: 0 0 auto;
 }
 
+/* A form, unlike a confirmation, should not change width as its hint
+   appears and disappears. */
+.dialog--form {
+  width: 100%;
+}
+
+.dialog__error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+/* Remove sits apart from Save so it is not hit on the way there. */
+.dialog__remove {
+  margin-inline-end: auto;
+  color: var(--danger);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+
+.field__label {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.field__value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.field textarea {
+  resize: vertical;
+}
+
+.field__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.field__choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.field__hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
 /* --------------------------------------------------------- button variants */
 /* Destructive, and the only one of its kind: closing the line hangs up on
    real people. Red so it never reads as a peer of the tabs it sits beside. */
@@ -1318,7 +1637,8 @@ h2 {
   .queue,
   .detail,
   .transcript,
-  .history__scroll {
+  .history__scroll,
+  .contacts__scroll {
     overflow: visible;
     max-height: none;
   }
@@ -1327,8 +1647,16 @@ h2 {
     min-height: 0;
   }
 
+  /* Tables wider than a phone scroll sideways inside their panel instead of
+     being clipped by it. With no height cap this adds no vertical scrollbar. */
+  .history__scroll,
+  .contacts__scroll {
+    overflow-x: auto;
+  }
+
   /* Sticky headers only make sense inside their own scroll container. */
-  .history__table thead th {
+  .history__table thead th,
+  .contacts__table thead th {
     position: static;
   }
 }

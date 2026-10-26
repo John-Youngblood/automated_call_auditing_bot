@@ -140,11 +140,19 @@ class TestSpeechResult:
         assert event["type"] == "call.updated"
         assert event["data"]["call"]["transcript"] == "I'm calling about an invoice."
 
-    def test_speech_for_an_unknown_call_does_not_error(self, client: TestClient) -> None:
-        """Twilio retries; a result can outlive the call it belongs to."""
+    def test_speech_for_a_finished_call_is_dropped(self, client: TestClient) -> None:
+        """Twilio retries; a result can outlive the call it belongs to, and
+        must not put that caller back in the queue."""
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+        client.post(
+            "/webhook/call-status",
+            data={"CallSid": TWILIO_FORM["CallSid"], "CallStatus": "completed"},
+        )
+
         response = self.speak(client, "hello")
 
         assert response.status_code == 200
+        assert client.get("/api/calls").json() == []
 
 
 class TestSignatureValidation:
@@ -186,6 +194,16 @@ class TestSignatureValidation:
             response = client.post(
                 "/webhook/speech-result",
                 data={"CallSid": "CA1", "SpeechResult": "let me in"},
+            )
+
+        assert response.status_code == 403
+
+    def test_call_status_is_also_verified(self, make_client) -> None:
+        """It ends calls in saved history, so an unsigned post could close the
+        call of a caller who is still holding."""
+        with make_client(VALIDATE_WEBHOOK_SIGNATURE="true", TWILIO_AUTH_TOKEN=self.TOKEN) as client:
+            response = client.post(
+                "/webhook/call-status", data={"CallSid": "CA1", "CallStatus": "completed"}
             )
 
         assert response.status_code == 403
@@ -548,3 +566,80 @@ class TestTurnedAwayUnanswered:
             response = self.call_in(client, "CA-spoof", StirVerstat="TN-Validation-Failed-A")
 
         assert fromstring(response.text).find("Gather") is not None
+
+    def test_a_blocked_number_is_refused_whatever_the_line_is_doing(
+        self, client: TestClient
+    ) -> None:
+        """Before the line check, so a blocked number hears the same "not in
+        service" every time -- and every attempt is counted."""
+        client.patch(f"/api/contacts/{TWILIO_FORM['From']}", json={"standing": "blocked"})
+        client.post("/api/line/close")
+
+        for sid in ("CA-blocked-1", "CA-blocked-2"):
+            doc = fromstring(self.call_in(client, sid).text)
+            assert [child.tag for child in doc] == ["Reject"]
+            assert doc.find("Reject").attrib["reason"] == "rejected"
+
+        # Never screened, so in neither the queue nor history.
+        assert client.get("/api/calls").json() == []
+        assert client.get("/api/calls/CA-blocked-1").status_code == 404
+        [contact] = client.get("/api/contacts").json()
+        assert contact["blockedAttempts"] == 2
+
+
+class TestCallerProfile:
+    """What the queue row says about who is calling, beyond the transcript."""
+
+    def caller(self, client: TestClient, sid: str = TWILIO_FORM["CallSid"]) -> dict:
+        return client.get(f"/api/calls/{sid}").json()["caller"]
+
+    @pytest.mark.parametrize("withheld", ["anonymous", "+266696687"])
+    def test_a_withheld_number_is_no_number_at_all(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, withheld: str
+    ) -> None:
+        """Not looked up either: every withheld caller would otherwise share
+        one contact and one history."""
+        looked_up: list[object] = []
+        monkeypatch.setattr(
+            client.app.state.store, "caller_profile", lambda *args, **_: looked_up.append(args)
+        )
+
+        client.post("/webhook/incoming-call", data={**TWILIO_FORM, "From": withheld})
+
+        assert self.caller(client)["number"] is None
+        assert self.caller(client)["contact"] is None
+        assert looked_up == []
+
+    @pytest.mark.parametrize(
+        ("verstat", "verified"),
+        [("TN-Validation-Passed-A", True), ("TN-Validation-Passed-B", False), ("", False)],
+    )
+    def test_only_full_attestation_counts_as_verified(
+        self, client: TestClient, verstat: str, verified: bool
+    ) -> None:
+        client.post("/webhook/incoming-call", data={**TWILIO_FORM, "StirVerstat": verstat})
+
+        assert self.caller(client)["verified"] is verified
+
+    def test_a_contact_rides_along_with_the_call(self, client: TestClient) -> None:
+        client.patch(f"/api/contacts/{TWILIO_FORM['From']}", json={"name": "Pat"})
+
+        client.post("/webhook/incoming-call", data=TWILIO_FORM)
+
+        assert self.caller(client)["contact"]["name"] == "Pat"
+
+    def test_a_repeat_callers_history_leaves_out_this_call(self, make_client) -> None:
+        """The case that matters is Twilio retrying the ring across a restart:
+        by then this call's own row is saved, and must not count itself."""
+        with make_client() as client:
+            client.post("/webhook/incoming-call", data={**TWILIO_FORM, "CallSid": "CA-first"})
+            client.post("/api/calls/CA-first/reject")
+            client.post("/webhook/incoming-call", data={**TWILIO_FORM, "CallSid": "CA-again"})
+
+        with make_client(RECONCILE_ON_STARTUP="false") as client:
+            client.post("/webhook/incoming-call", data={**TWILIO_FORM, "CallSid": "CA-again"})
+            history = self.caller(client, "CA-again")["history"]
+
+        assert history["previousCalls"] == 1
+        assert history["timesRejected"] == 1
+        assert history["timesOnAir"] == 0

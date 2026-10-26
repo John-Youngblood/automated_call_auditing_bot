@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from app.schemas.calls import Call, CamelModel
+from app.schemas.calls import Call, CamelModel, Contact
 
 
 class ServerEventType(StrEnum):
@@ -29,6 +29,10 @@ class ServerEventType(StrEnum):
     #: dashboard agrees on whether the show is taking calls -- two operators
     #: disagreeing about that is how someone gets put on air after the show.
     LINE_CHANGED = "line.changed"
+    #: A contact was saved, or removed (``contact`` null). Calls in play from
+    #: that number also get ``call.updated``; this one is for the contacts
+    #: list and call history.
+    CONTACT_CHANGED = "contact.changed"
     PONG = "pong"
     ERROR = "error"
 
@@ -52,7 +56,11 @@ class ServerEvent(CamelModel):
     #    payload shape for each type lives in exactly one place ------------
     @classmethod
     def snapshot(
-        cls, calls: list[Call], line_open: bool = True, screening_number: str = ""
+        cls,
+        calls: list[Call],
+        line_open: bool = True,
+        screening_number: str = "",
+        storage_warning: str | None = None,
     ) -> ServerEvent:
         return cls(
             type=ServerEventType.SNAPSHOT,
@@ -65,12 +73,26 @@ class ServerEvent(CamelModel):
                 # because the snapshot is the one message every dashboard is
                 # guaranteed to get, on connect and on every reconnect.
                 "screeningNumber": screening_number or None,
+                # Sticky until restart, so this is where a dashboard learns of
+                # it. The error event when storage fails only reaches the
+                # dashboards open at the time.
+                "storageWarning": storage_warning,
             },
         )
 
     @classmethod
     def line_changed(cls, line_open: bool) -> ServerEvent:
         return cls(type=ServerEventType.LINE_CHANGED, data={"lineOpen": line_open})
+
+    @classmethod
+    def contact_changed(cls, number: str, contact: Contact | None) -> ServerEvent:
+        return cls(
+            type=ServerEventType.CONTACT_CHANGED,
+            data={
+                "number": number,
+                "contact": contact.model_dump(by_alias=True, mode="json") if contact else None,
+            },
+        )
 
     @classmethod
     def call_event(
@@ -89,8 +111,16 @@ class ServerEvent(CamelModel):
         )
 
     @classmethod
-    def error(cls, message: str, call_id: str | None = None) -> ServerEvent:
-        return cls(type=ServerEventType.ERROR, call_id=call_id, data={"message": message})
+    def error(
+        cls, message: str, call_id: str | None = None, *, storage: bool = False
+    ) -> ServerEvent:
+        data: dict[str, Any] = {"message": message}
+        if storage:
+            # Storage failing stays true until a restart, so the dashboard
+            # shows it as the snapshot's banner rather than an alert that the
+            # next decision clears.
+            data["storage"] = True
+        return cls(type=ServerEventType.ERROR, call_id=call_id, data=data)
 
     @classmethod
     def pong(cls) -> ServerEvent:

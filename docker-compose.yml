@@ -26,11 +26,14 @@ services:
       # Source only. .venv / site-packages live in the image, not the mount.
       - ./backend/app:/srv/app
       - ./backend/tests:/srv/tests
-    # Deliberately ONE worker, and the service keeps nothing on disk. Call
-    # state, recent history and the dashboard fan-out hub are all in-process,
-    # so a second worker would see a different set of calls and a restart
-    # starts empty. To scale horizontally, move the hub onto Redis pub/sub
-    # first (see app/services/broadcaster.py).
+      # Call history and contacts (SQLite), kept across restarts and rebuilds.
+      # `docker compose down -v` resets it. A named volume, never a bind-mount
+      # of the database: WAL is unreliable over Docker Desktop's file sharing.
+      - dev-data:/srv/data
+    # Deliberately ONE worker. Live call state, the database connection and
+    # the dashboard fan-out hub are all in-process, so a second worker would
+    # see a different set of calls. To scale horizontally, move the hub onto
+    # Redis pub/sub first (see app/services/broadcaster.py).
     command: >
       uvicorn app.main:app
       --host 0.0.0.0
@@ -73,3 +76,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  dev-data: {}

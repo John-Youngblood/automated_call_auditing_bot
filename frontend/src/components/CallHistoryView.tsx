@@ -1,11 +1,22 @@
-import { formatClock, formatDuration, formatPhoneNumber, statusLabel } from '../lib/format';
-import type { Call } from '../types/events';
+import type { CallHistory } from '../hooks/useCallHistory';
+import {
+  callerLabel,
+  formatClock,
+  formatDuration,
+  formatPhoneNumber,
+  formatShortDate,
+  numberUnderName,
+  statusLabel,
+} from '../lib/format';
+import type { Call, Contact } from '../types/events';
 
 interface Props {
-  calls: Call[];
-  loading: boolean;
-  error: string | null;
-  onRefresh: () => void;
+  history: CallHistory;
+  /** Shown in place of "Saved on this machine" when that stops being true. */
+  storageWarning: string | null;
+  onEditContact: (number: string, contact: Contact | null) => void;
+  onBlock: (number: string) => void;
+  onUnblock: (number: string) => void;
 }
 
 /**
@@ -15,26 +26,61 @@ interface Props {
  * few rows demanding a decision in the next few seconds. History is a record,
  * read at leisure, and mixing the two makes the urgent rows harder to find.
  *
- * The server keeps these in memory only, so the list starts empty after a
- * backend restart. The subtitle says so rather than leaving an operator to
+ * Kept on disk by the backend, so it outlives a restart. The subtitle says so,
+ * or says why not when storage has failed, rather than leaving an operator to
  * wonder where the morning's calls went.
  */
-export default function CallHistoryView({ calls, loading, error, onRefresh }: Props) {
+export default function CallHistoryView({
+  history,
+  storageWarning,
+  onEditContact,
+  onBlock,
+  onUnblock,
+}: Props) {
+  const { calls, loading, error } = history;
+  const filtered = history.number !== null || history.query.trim() !== '';
+
   return (
     <section className="history" aria-label="Call history">
       <header className="history__header">
         <div>
           <h2>Call History</h2>
-          <p className="history__subtitle">
-            {calls.length > 0
-              ? `${calls.length} recent call${calls.length === 1 ? '' : 's'} · cleared when the server restarts`
-              : 'Accepted, rejected and dropped calls'}
+          <p className={`history__subtitle${storageWarning ? ' history__subtitle--warning' : ''}`}>
+            {storageWarning ?? 'Saved on this machine'}
           </p>
         </div>
-        <button type="button" className="button button--ghost button--compact" onClick={onRefresh}>
+        <button
+          type="button"
+          className="button button--ghost button--compact"
+          onClick={history.refresh}
+        >
           Refresh
         </button>
       </header>
+
+      <div className="toolbar">
+        <input
+          className="input toolbar__search"
+          type="search"
+          value={history.query}
+          onChange={(event) => history.setQuery(event.target.value)}
+          placeholder="Search what callers said, names, notes, numbers"
+          aria-label="Search call history"
+        />
+        {history.number && (
+          <span className="chip chip--active">
+            {formatPhoneNumber(history.number)}
+            <button
+              type="button"
+              className="chip__remove"
+              onClick={() => history.showNumber(null)}
+              aria-label="Show calls from every number"
+            >
+              ×
+            </button>
+          </span>
+        )}
+      </div>
 
       {error && (
         <p className="history__error" role="alert">
@@ -45,7 +91,9 @@ export default function CallHistoryView({ calls, loading, error, onRefresh }: Pr
       {loading && calls.length === 0 ? (
         <p className="history__empty">Loading…</p>
       ) : calls.length === 0 ? (
-        <p className="history__empty">No calls yet. Finished calls appear here.</p>
+        <p className="history__empty">
+          {filtered ? 'No calls match.' : 'No calls yet. Finished calls appear here.'}
+        </p>
       ) : (
         <div className="history__scroll">
           <table className="history__table">
@@ -59,18 +107,46 @@ export default function CallHistoryView({ calls, loading, error, onRefresh }: Pr
             </thead>
             <tbody>
               {calls.map((call) => (
-                <HistoryRow key={call.callId} call={call} />
+                <HistoryRow
+                  key={call.callId}
+                  call={call}
+                  onEditContact={onEditContact}
+                  onBlock={onBlock}
+                  onUnblock={onUnblock}
+                />
               ))}
             </tbody>
           </table>
+
+          {history.hasMore && (
+            <div className="history__more">
+              <button
+                type="button"
+                className="button button--ghost button--compact"
+                onClick={history.loadOlder}
+                disabled={history.loadingOlder}
+              >
+                {history.loadingOlder ? 'Loading…' : 'Load older calls'}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </section>
   );
 }
 
-function HistoryRow({ call }: { call: Call }) {
+interface RowProps {
+  call: Call;
+  onEditContact: (number: string, contact: Contact | null) => void;
+  onBlock: (number: string) => void;
+  onUnblock: (number: string) => void;
+}
+
+function HistoryRow({ call, onEditContact, onBlock, onUnblock }: RowProps) {
   const duration = durationSeconds(call);
+  const { number, contact } = call.caller;
+  const blocked = contact?.standing === 'blocked';
 
   return (
     <tr>
@@ -80,21 +156,47 @@ function HistoryRow({ call }: { call: Call }) {
       </td>
 
       <td>
-        {/* Carrier caller-ID name when there is one, with the number below it;
-            otherwise the number is the heading. */}
+        {/* A name when there is one, with the number below it; otherwise the
+            number is the heading. */}
         <span className="history__number">
-          {call.caller.name ?? formatPhoneNumber(call.caller.number)}
+          {contact?.standing === 'favorite' && (
+            <span className="star" role="img" aria-label="Favorite">
+              ★
+            </span>
+          )}
+          {callerLabel(call.caller)}
+          {blocked && <span className="status status--blocked">blocked</span>}
         </span>
         <span className="history__caller-meta">
-          {[call.caller.name ? formatPhoneNumber(call.caller.number) : null, call.caller.location]
-            .filter(Boolean)
-            .join(' · ')}
+          {[numberUnderName(call.caller), call.caller.location].filter(Boolean).join(' · ')}
         </span>
+        {/* A withheld number has nothing to save a contact against. */}
+        {number && (
+          <span className="history__actions">
+            <button type="button" className="link" onClick={() => onEditContact(number, contact)}>
+              {contact ? 'Edit contact' : 'Add contact'}
+            </button>
+            {blocked ? (
+              <button type="button" className="link" onClick={() => onUnblock(number)}>
+                Unblock
+              </button>
+            ) : (
+              <button type="button" className="link" onClick={() => onBlock(number)}>
+                Block
+              </button>
+            )}
+          </span>
+        )}
       </td>
 
       <td>
         <span className={`status status--${call.status}`}>{statusLabel(call.status)}</span>
         {duration !== null && <span className="history__duration">{formatDuration(duration)}</span>}
+        {/* Closed by the startup sweep: the backend was down when it ended, so
+            nobody knows when, and a duration would be a guess. */}
+        {call.status === 'ended' && call.endedAt === null && (
+          <span className="history__restart">ended during a restart</span>
+        )}
         {/* `ended` is where every finished call lands, so on its own it cannot
             say whether this one made it on air. */}
         {call.wasAccepted && (
@@ -119,7 +221,7 @@ function HistoryRow({ call }: { call: Call }) {
   );
 }
 
-/** How long the call was being screened, or null while it is still open. */
+/** How long the call was being screened, or null when that is unknown. */
 function durationSeconds(call: Call): number | null {
   if (!call.endedAt) return null;
   const seconds = (new Date(call.endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000;
@@ -133,5 +235,5 @@ function formatHistoryDate(iso: string): string {
     date.getFullYear() === today.getFullYear() &&
     date.getMonth() === today.getMonth() &&
     date.getDate() === today.getDate();
-  return sameDay ? 'Today' : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return sameDay ? 'Today' : formatShortDate(iso);
 }

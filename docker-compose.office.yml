@@ -28,9 +28,12 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     ports:
-      # Published for `make simulate` and for reading logs from the host.
+      # Published for reading logs from the host. Not for `make simulate`:
+      # simulated calls are saved like real ones, into the show's history.
       # Colleagues use the dashboard on ${FRONTEND_PORT} instead.
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - office-data:/srv/data
     healthcheck:
       test:
         - CMD-SHELL
@@ -66,3 +69,11 @@ services:
       backend:
         condition: service_healthy
     restart: always
+
+volumes:
+  # Call history and contacts. Survives reboots, rebuilds and
+  # `make office-down`; deleted only by `docker compose down -v` or Docker
+  # Desktop's Clean / Purge data. Not named dev-data on purpose: both compose
+  # files use the project name call-screener, so one key would mean one shared
+  # database.
+  office-data: {}

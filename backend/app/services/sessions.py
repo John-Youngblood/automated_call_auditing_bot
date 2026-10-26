@@ -4,9 +4,9 @@ Deliberately small. There is one host and a handful of operators, so there are
 no accounts, no roles and no password store -- just ``DASHBOARD_PASSWORD``
 traded for an opaque token that the browser sends back.
 
-Tokens live in memory, like everything else here, so a restart logs everyone
-out. That is the right trade for a tool whose whole state is already in
-memory, and it doubles as revocation: redeploy and every token is dead.
+Tokens live in memory, unlike call history, so a restart logs everyone out.
+Signing back in is one password away, and it doubles as revocation: redeploy
+and every token is dead.
 
 What this does *not* cover, on purpose:
 

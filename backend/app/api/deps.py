@@ -19,6 +19,7 @@ from app.config import Settings, get_settings
 from app.services.broadcaster import Broadcaster
 from app.services.call_registry import CallRegistry
 from app.services.line_state import LineState
+from app.services.store import Store
 
 
 def provide_settings() -> Settings:
@@ -37,7 +38,12 @@ def provide_line(conn: HTTPConnection) -> LineState:
     return conn.app.state.line
 
 
+def provide_store(conn: HTTPConnection) -> Store:
+    return conn.app.state.store
+
+
 SettingsDep = Annotated[Settings, Depends(provide_settings)]
 BroadcasterDep = Annotated[Broadcaster, Depends(provide_broadcaster)]
 RegistryDep = Annotated[CallRegistry, Depends(provide_registry)]
 LineDep = Annotated[LineState, Depends(provide_line)]
+StoreDep = Annotated[Store, Depends(provide_store)]

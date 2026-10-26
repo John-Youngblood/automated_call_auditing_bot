@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { ApiError, callsApi } from '../lib/api';
 import { expireSession, readToken } from '../lib/auth';
 import { ReconnectingSocket, resolveWebSocketUrl } from '../lib/websocket';
-import type { Call, ConnectionStatus, ServerEvent } from '../types/events';
+import type { Call, ConnectionStatus, Contact, ServerEvent } from '../types/events';
 import { isServerEvent, isTerminal } from '../types/events';
 
 /** Finished calls kept for review before being pruned. */
@@ -33,6 +33,13 @@ interface State {
   lineOpen: boolean;
   /** The number listeners dial. Config, so it only ever arrives in a snapshot. */
   screeningNumber: string | null;
+  /** Why calls and contacts are not being saved, or null when they are. */
+  storageWarning: string | null;
+  /**
+   * Bumped every time a contact changes, on this dashboard or another. Like
+   * `endedCount`, it tells the HTTP-fetched views to refetch.
+   */
+  contactsVersion: number;
 }
 
 const initialState: State = {
@@ -46,6 +53,8 @@ const initialState: State = {
   // "off air" on every page load during a live show.
   lineOpen: true,
   screeningNumber: null,
+  storageWarning: null,
+  contactsVersion: 0,
 };
 
 type Action =
@@ -59,6 +68,20 @@ function upsertCall(state: State, call: Call): State {
     calls: { ...state.calls, [call.callId]: call },
     order: state.order.includes(call.callId) ? state.order : [...state.order, call.callId],
   };
+}
+
+/**
+ * Calls the server still holds hear about a contact change as `call.updated`.
+ * Finished ones it has already let go of, so the recent calls kept here are
+ * patched directly -- otherwise a name given from a recent call never shows on
+ * it.
+ */
+function applyContact(state: State, number: string, contact: Contact | null): State {
+  const calls = { ...state.calls };
+  for (const [id, call] of Object.entries(calls)) {
+    if (call.caller.number === number) calls[id] = { ...call, caller: { ...call.caller, contact } };
+  }
+  return { ...state, calls, contactsVersion: state.contactsVersion + 1 };
 }
 
 function pruneTerminal(state: State): State {
@@ -96,6 +119,7 @@ function reducer(state: State, action: Action): State {
             order: event.data.calls.map((call) => call.callId),
             lineOpen: event.data.lineOpen,
             screeningNumber: event.data.screeningNumber,
+            storageWarning: event.data.storageWarning,
           };
         }
 
@@ -114,8 +138,15 @@ function reducer(state: State, action: Action): State {
           return { ...next, endedCount: next.endedCount + 1 };
         }
 
+        case 'contact.changed':
+          return applyContact(state, event.data.number, event.data.contact);
+
         case 'error':
-          return { ...state, lastError: event.data.message };
+          // Storage failing mid-show goes to the banner, not `lastError`: the
+          // next accept or reject clears that, and this stays true.
+          return event.data.storage
+            ? { ...state, storageWarning: event.data.message }
+            : { ...state, lastError: event.data.message };
 
         case 'pong':
           return state;
@@ -141,6 +172,10 @@ export interface UseCallStream {
   lineOpen: boolean;
   /** The number listeners dial, or null when it is not configured. */
   screeningNumber: string | null;
+  /** Why calls and contacts are not being saved, or null when they are. */
+  storageWarning: string | null;
+  /** Increments when a contact changes; drives the contacts and history refetch. */
+  contactsVersion: number;
   /** Calls awaiting a decision or being screened, oldest first. */
   activeCalls: Call[];
   /** Recently finished calls, newest first. */
@@ -241,6 +276,8 @@ export function useCallStream(): UseCallStream {
     lastError: state.lastError,
     lineOpen: state.lineOpen,
     screeningNumber: state.screeningNumber,
+    storageWarning: state.storageWarning,
+    contactsVersion: state.contactsVersion,
     activeCalls,
     recentCalls,
     selectedCall,

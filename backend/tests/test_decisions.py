@@ -91,9 +91,7 @@ class TestReject:
         holding, so REJECTED must not be recorded -- that would take them off
         the dashboard while they sit in hold music."""
         hold(client)
-        patch_twilio(
-            monkeypatch, httpx.MockTransport(lambda r: httpx.Response(401, text="nope"))
-        )
+        patch_twilio(monkeypatch, httpx.MockTransport(lambda r: httpx.Response(401, text="nope")))
 
         assert client.post("/api/calls/CA-dec-1/reject").status_code == 502
 
@@ -168,9 +166,7 @@ class TestWebsocketPath:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         hold(client)
-        patch_twilio(
-            monkeypatch, httpx.MockTransport(lambda r: httpx.Response(500, text="boom"))
-        )
+        patch_twilio(monkeypatch, httpx.MockTransport(lambda r: httpx.Response(500, text="boom")))
 
         with client.websocket_connect("/ws/frontend") as ws:
             ws.receive_json()
@@ -290,7 +286,8 @@ class TestDialComplete:
         assert [child.tag for child in fromstring(response.text)] == ["Hangup"]
 
     def test_an_unknown_call_is_not_an_error(self, client: TestClient) -> None:
-        """Twilio retries and late deliveries outlive a pruned registry."""
+        """Twilio retries and late deliveries can name a call this process
+        never saw."""
         assert self.dial_result(client, "completed").status_code == 200
 
 
@@ -299,9 +296,7 @@ def test_accept_tells_twilio_where_to_report(client: TestClient, recorder) -> No
     client.post("/api/calls/CA-dec-1/accept")
 
     doc = fromstring(sent_twiml(recorder, "CA-dec-1"))
-    assert doc.find("Dial").attrib["action"] == (
-        "https://calls.example.test/webhook/dial-complete"
-    )
+    assert doc.find("Dial").attrib["action"] == ("https://calls.example.test/webhook/dial-complete")
 
 
 def test_the_caller_hanging_up_also_ends_an_accepted_call(client: TestClient) -> None:
@@ -311,9 +306,7 @@ def test_the_caller_hanging_up_also_ends_an_accepted_call(client: TestClient) ->
     hold(client)
     client.post("/api/calls/CA-dec-1/accept")
 
-    client.post(
-        "/webhook/call-status", data={"CallSid": "CA-dec-1", "CallStatus": "completed"}
-    )
+    client.post("/webhook/call-status", data={"CallSid": "CA-dec-1", "CallStatus": "completed"})
 
     assert client.get("/api/calls/CA-dec-1").json()["status"] == "ended"
 
@@ -325,9 +318,7 @@ def test_a_rejection_survives_the_caller_hanging_up(client: TestClient) -> None:
     hold(client)
     client.post("/api/calls/CA-dec-1/reject")
 
-    client.post(
-        "/webhook/call-status", data={"CallSid": "CA-dec-1", "CallStatus": "completed"}
-    )
+    client.post("/webhook/call-status", data={"CallSid": "CA-dec-1", "CallStatus": "completed"})
 
     assert client.get("/api/calls/CA-dec-1").json()["status"] == "rejected"
 

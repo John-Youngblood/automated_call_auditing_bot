@@ -1,7 +1,8 @@
 /** Small display helpers, kept out of the components. */
 
-export function formatPhoneNumber(raw: string | null): string {
-  if (!raw) return 'Unknown caller';
+import type { Caller, CallerHistory } from '../types/events';
+
+export function formatPhoneNumber(raw: string): string {
   // Light touch for US/E.164; anything else is shown as-is rather than mangled.
   const match = /^\+?1?(\d{3})(\d{3})(\d{4})$/.exec(raw.replace(/[^\d+]/g, ''));
   if (!match) return raw;
@@ -10,6 +11,49 @@ export function formatPhoneNumber(raw: string | null): string {
 
 export function formatClock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** "Oct 3". */
+export function formatShortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/**
+ * The one name to show for a caller: what the operators called them, then the
+ * carrier's caller-ID name, then the number.
+ */
+export function callerLabel(caller: Caller): string {
+  return (
+    caller.contact?.name ??
+    caller.name ??
+    (caller.number ? formatPhoneNumber(caller.number) : 'No caller ID')
+  );
+}
+
+/** The formatted number, when `callerLabel` shows a name in its place. */
+export function numberUnderName(caller: Caller): string | null {
+  return caller.number && (caller.contact?.name ?? caller.name)
+    ? formatPhoneNumber(caller.number)
+    : null;
+}
+
+/**
+ * The most decision-worthy things about a caller's earlier calls, at most
+ * `max` of them. A rejection outranks an appearance, which outranks merely
+ * having called; a first-time caller gets nothing rather than "0×".
+ */
+export function callerFacts(history: CallerHistory, max: number): string[] {
+  const facts: string[] = [];
+  if (history.timesRejected > 0) facts.push(`Rejected ${history.timesRejected}×`);
+  if (history.timesOnAir > 0) {
+    facts.push(
+      history.lastOnAirAt
+        ? `On air ${history.timesOnAir}× · last ${formatShortDate(history.lastOnAirAt)}`
+        : `On air ${history.timesOnAir}×`,
+    );
+  }
+  if (history.previousCalls > 0) facts.push(`Called ${history.previousCalls}× before`);
+  return facts.slice(0, max);
 }
 
 /** Elapsed seconds as m:ss, for a live call timer. */
